@@ -72,23 +72,45 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <!-- Proxy host DLL. version is the default deployment target (the shipped
+       build forwards the 17 exports of the system version.dll); winmm is kept
+       as an opt-in for games that import winmm.dll instead.
+       Override from the command line or from build.bat:
+         msbuild Nepgear.sln -p:NepgearProxy=winmm
+       TargetName, the proxy header in dllmain.cpp and the MASM trampolines all
+       follow this property, so the two builds never mix artifacts. -->
+  <PropertyGroup>
+    <NepgearProxy Condition="'$(NepgearProxy)'==''">version</NepgearProxy>
+    <NepgearProxyIsVersion Condition="'$(NepgearProxy)'=='version'">true</NepgearProxyIsVersion>
+    <!-- Startup author notice. 1 (default) shows the 游玩通知 message box, 0
+         compiles the whole notice out of the DLL (no string, no MessageBox).
+         Override with -p:NepgearStartupPopup=0, or build.bat nopopup, or the
+         no-popup switch of 编译/build_chs_embed.py. -->
+    <NepgearStartupPopup Condition="'$(NepgearStartupPopup)'==''">1</NepgearStartupPopup>
+    <NepgearPopupDisabled Condition="'$(NepgearStartupPopup)'=='0'">true</NepgearPopupDisabled>
+  </PropertyGroup>
   <PropertyGroup>
     <OutDir Condition="'$(Platform)'=='Win32'">$(ProjectDir)..\$(Configuration)\</OutDir>
     <OutDir Condition="'$(Platform)'=='x64'">$(ProjectDir)..\x64\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
+    <!-- One IntDir per proxy and per popup setting: dllmain.cpp compiles a
+         different proxy header and a different set of exports, and
+         utils.cpp bakes NEPGEAR_ENABLE_STARTUP_POPUP into the binary. MSBuild
+         only compares timestamps, so without a separate IntDir a toggle would
+         silently reuse the previous objects. -->
+    <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\$(NepgearProxy)\popup$(NepgearStartupPopup)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <TargetName>winmm</TargetName>
+    <TargetName>$(NepgearProxy)</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <TargetName>winmm</TargetName>
+    <TargetName>$(NepgearProxy)</TargetName>
     <IgnoreImportLibrary>true</IgnoreImportLibrary>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <TargetName>winmm</TargetName>
+    <TargetName>$(NepgearProxy)</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <TargetName>winmm</TargetName>
+    <TargetName>$(NepgearProxy)</TargetName>
     <IgnoreImportLibrary>true</IgnoreImportLibrary>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -96,6 +118,8 @@
         <WarningLevel>Level3</WarningLevel>
         <SDLCheck>true</SDLCheck>
         <PreprocessorDefinitions>WIN32;_DEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <ConformanceMode>true</ConformanceMode>
         <PrecompiledHeader>NotUsing</PrecompiledHeader>
         <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -119,6 +143,8 @@
         <StringPooling>true</StringPooling>
         <SDLCheck>true</SDLCheck>
         <PreprocessorDefinitions>WIN32;NDEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <ConformanceMode>true</ConformanceMode>
         <PrecompiledHeader>NotUsing</PrecompiledHeader>
         <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -140,6 +166,8 @@
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -163,6 +191,8 @@
       <StringPooling>true</StringPooling>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -221,6 +251,10 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Optional embedded .chs payload, generated by 编译/build_chs_embed.py. -->
+    <ResourceCompile Include="chs_payload.rc" Condition="Exists('$(ProjectDir)chs_payload.rc')" />
   </ItemGroup>
   <ItemGroup>
     <None Include="hooks\internal\engines\rioshiina\rioshiina_install.cppinc" />
@@ -292,7 +326,10 @@
     <None Include="hooks\internal\window\window_hook_title.cppinc" />
   </ItemGroup>
   <ItemGroup>
-    <MASM Include="Proxy_x64.asm">
+    <MASM Include="Proxy_x64.asm" Condition="'$(NepgearProxyIsVersion)'!='true'">
+      <ExcludedFromBuild Condition="'$(Platform)'=='Win32'">true</ExcludedFromBuild>
+    </MASM>
+    <MASM Include="ProxyVersion_x64.asm" Condition="'$(NepgearProxyIsVersion)'=='true'">
       <ExcludedFromBuild Condition="'$(Platform)'=='Win32'">true</ExcludedFromBuild>
     </MASM>
   </ItemGroup>
@@ -300,52 +337,25 @@
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
   </ImportGroup>
-  <!-- Release DLLs ship UPX-compressed. The linker output is packed in place so
-       $(TargetPath) is always the final artifact; no separate pack step is
-       needed. Set NepgearSkipPack=1 (property or environment variable) to keep
-       an uncompressed DLL for PDB-based debugging. -->
-  <PropertyGroup>
-    <NepgearUpxExe Condition="'$(NepgearUpxExe)'==''">$(ProjectDir)..\tools\upx\upx.exe</NepgearUpxExe>
-    <NepgearPackStamp>$(IntDir)$(TargetName).upx.stamp</NepgearPackStamp>
-    <NepgearPackEnabled>false</NepgearPackEnabled>
-    <NepgearPackEnabled Condition="'$(Configuration)'=='Release' AND '$(NepgearSkipPack)'!='1' AND Exists('$(NepgearUpxExe)')">true</NepgearPackEnabled>
-  </PropertyGroup>
-  <!-- A stamp newer than the DLL is only trustworthy if that exact DLL is still
-       packed. Drop the stamp when the output was replaced or hand-unpacked. -->
-  <Target Name="NepgearPackReleaseVerifyStamp" AfterTargets="Link"
-      Condition="'$(NepgearPackEnabled)'=='true' AND Exists('$(NepgearPackStamp)')">
-    <Exec Command="&quot;$(NepgearUpxExe)&quot; -t --no-progress &quot;$(TargetPath)&quot;"
-        ContinueOnError="true" IgnoreExitCode="true"
-        StandardOutputImportance="low" StandardErrorImportance="low">
-      <Output TaskParameter="ExitCode" PropertyName="NepgearPackedProbe" />
-    </Exec>
-    <Delete Files="$(NepgearPackStamp)" Condition="'$(NepgearPackedProbe)'!='0'" />
-  </Target>
-  <Target Name="NepgearPackRelease" AfterTargets="Link"
-      DependsOnTargets="NepgearPackReleaseVerifyStamp"
-      Condition="'$(NepgearPackEnabled)'=='true'"
-      Inputs="$(TargetPath)" Outputs="$(NepgearPackStamp)">
-    <!-- Pack a staged copy first: a failed or interrupted UPX run must never
-         leave a truncated DLL in the output directory. -->
+  <!-- The Release DLL is always shipped uncompressed: a plain PE image loads
+       without an unpack stub and can be inspected with ordinary tools. -->
+  <!-- Switching proxy host or popup setting changes IntDir, so the objects the
+       linker compares against are not the ones the previous build produced. Left alone, Link looks
+       up-to-date (the old DLL is newer than these objects) and we ship the
+       previous binary. Record the last setting and drop the output whenever it
+       changes. -->
+  <Target Name="NepgearSettingsGuard" BeforeTargets="Link">
     <PropertyGroup>
-      <NepgearPackStaged>$(IntDir)upx\$(TargetFileName)</NepgearPackStaged>
+      <NepgearSettingsFile>$(ProjectDir)obj\last-build-settings.txt</NepgearSettingsFile>
+      <NepgearSettingsToken>$(NepgearProxy)/popup$(NepgearStartupPopup)</NepgearSettingsToken>
+      <NepgearPreviousSettings />
     </PropertyGroup>
-    <MakeDir Directories="$(IntDir)upx" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(NepgearPackStaged)" />
-    <Exec Command="&quot;$(NepgearUpxExe)&quot; --best --lzma --no-progress &quot;$(NepgearPackStaged)&quot;"
-        StandardOutputImportance="low" />
-    <Exec Command="&quot;$(NepgearUpxExe)&quot; -t --no-progress &quot;$(NepgearPackStaged)&quot;"
-        StandardOutputImportance="low" />
-    <Copy SourceFiles="$(NepgearPackStaged)" DestinationFiles="$(TargetPath)" />
-    <Exec Command="&quot;$(NepgearUpxExe)&quot; -t --no-progress &quot;$(TargetPath)&quot;"
-        StandardOutputImportance="low" />
-    <Touch Files="$(NepgearPackStamp)" AlwaysCreate="true" />
-    <Message Importance="high" Text="$(TargetFileName): UPX-compressed and verified -&gt; $(TargetPath)" />
-  </Target>
-  <!-- Without this the stamp survives a cleaned output directory and the next
-       build would ship an uncompressed DLL. -->
-  <Target Name="NepgearPackReleaseClean" AfterTargets="Clean">
-    <Delete Files="$(NepgearPackStamp)" />
-    <RemoveDir Directories="$(IntDir)upx" />
+    <ReadLinesFromFile File="$(NepgearSettingsFile)" Condition="Exists('$(NepgearSettingsFile)')">
+      <Output TaskParameter="Lines" PropertyName="NepgearPreviousSettings" />
+    </ReadLinesFromFile>
+    <Delete Files="$(TargetPath)"
+        Condition="'$(NepgearPreviousSettings)'!='$(NepgearSettingsToken)'" />
+    <MakeDir Directories="$(ProjectDir)obj" />
+    <WriteLinesToFile File="$(NepgearSettingsFile)" Lines="$(NepgearSettingsToken)" Overwrite="true" />
   </Target>
 </Project>

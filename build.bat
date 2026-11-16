@@ -3,13 +3,15 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul 2>nul
 cd /d "%~dp0"
 
-REM Usage: build.bat [x86|x64|all] [rebuild] [debug]
-REM   Release builds emit an already UPX-compressed winmm.dll; no pack step.
-REM   Set NEPGEAR_SKIP_PACK=1 to keep the DLL uncompressed for PDB debugging.
+REM Usage: build.bat [x86|x64|all] [popup|nopopup] [rebuild] [debug]
+REM   The proxy DLL is always emitted uncompressed. nopopup compiles the startup
+REM   author notice out of the DLL entirely.
 
 set "ARCH=all"
 set "BUILD_TARGET=Build"
 set "CONFIG=Release"
+set "PROXY=version"
+set "POPUP=1"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -17,11 +19,15 @@ if /I "%~1"=="x86"     ( set "ARCH=x86"          & shift & goto :parse_args )
 if /I "%~1"=="Win32"   ( set "ARCH=x86"          & shift & goto :parse_args )
 if /I "%~1"=="x64"     ( set "ARCH=x64"          & shift & goto :parse_args )
 if /I "%~1"=="all"     ( set "ARCH=all"          & shift & goto :parse_args )
+if /I "%~1"=="winmm"   ( set "PROXY=winmm"       & shift & goto :parse_args )
+if /I "%~1"=="version" ( set "PROXY=version"     & shift & goto :parse_args )
+if /I "%~1"=="popup"   ( set "POPUP=1"           & shift & goto :parse_args )
+if /I "%~1"=="nopopup" ( set "POPUP=0"           & shift & goto :parse_args )
 if /I "%~1"=="rebuild" ( set "BUILD_TARGET=Rebuild" & shift & goto :parse_args )
 if /I "%~1"=="debug"   ( set "CONFIG=Debug"      & shift & goto :parse_args )
 if /I "%~1"=="release" ( set "CONFIG=Release"    & shift & goto :parse_args )
 echo ERROR: Unknown argument "%~1".
-echo Usage: %~nx0 [x86^|x64^|all] [rebuild] [debug]
+echo Usage: %~nx0 [x86^|x64^|all] [popup^|nopopup] [rebuild] [debug]
 exit /b 2
 
 :args_done
@@ -42,9 +48,12 @@ if /I "!ARCH!"=="all" (
 echo.
 echo ============================================
 if "!BUILD_RESULT!"=="0" (
-    echo !CONFIG! build succeeded ^(!BUILD_TARGET!^).
-    call :report x86 "Release"
-    call :report x64 "x64\Release"
+    echo !CONFIG! build succeeded ^(!BUILD_TARGET!, proxy=!PROXY!.dll, popup=!POPUP!^).
+    if /I "!ARCH!"=="x86" call :report x86 "Release"
+    if /I "!ARCH!"=="all" (
+        call :report x86 "Release"
+        call :report x64 "x64\Release"
+    )
 ) else (
     echo !CONFIG! build FAILED.
 )
@@ -79,14 +88,14 @@ exit /b 0
 
 :build_one
 echo.
-echo [INFO] Building Nepgear + Packer + Unpacker ^(!CONFIG!^|%~1^)...
+echo [INFO] Building Nepgear + Packer + Unpacker ^(!CONFIG!^|%~1, proxy=!PROXY!, popup=!POPUP!^)...
 REM Suppress LNK4099 (detours.lib ships without a PDB).
 set "LINK=/IGNORE:4099"
-"!MSBUILD!" "Nepgear.sln" -p:Configuration=!CONFIG! -p:Platform=%~1 -t:!BUILD_TARGET! -v:minimal -m -nologo
+"!MSBUILD!" "Nepgear.sln" -p:Configuration=!CONFIG! -p:Platform=%~1 -p:NepgearProxy=!PROXY! -p:NepgearStartupPopup=!POPUP! -t:!BUILD_TARGET! -v:minimal -m -nologo
 exit /b !ERRORLEVEL!
 
 :report
-if exist "%~2\winmm.dll" (
-    for %%F in ("%~2\winmm.dll") do echo   %~1: %~2\winmm.dll ^(%%~zF bytes^)
+if exist "%~2\!PROXY!.dll" (
+    for %%F in ("%~2\!PROXY!.dll") do echo   %~1: %~2\!PROXY!.dll ^(%%~zF bytes^)
 )
 exit /b 0

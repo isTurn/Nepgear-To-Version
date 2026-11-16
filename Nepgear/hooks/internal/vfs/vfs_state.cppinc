@@ -58,6 +58,13 @@ namespace {
     };
 
     HANDLE g_ArchiveHandle = INVALID_HANDLE_VALUE;
+    // Archive bytes come from the opened .chs file or, when the payload is
+    // shipped as an RCDATA resource, straight out of the module image.
+    bool g_ArchiveEmbedded = false;
+    LONGLONG g_ArchiveCursor = 0;
+    LONGLONG g_ArchiveSize = 0;
+    const BYTE* g_EmbeddedArchiveBytes = nullptr;
+    LONGLONG g_EmbeddedArchiveByteCount = 0;
     wchar_t g_ArchivePath[MAX_PATH] = { 0 };
     wchar_t g_LooseFolderPath[MAX_PATH] = { 0 };
     wchar_t g_HybridCacheDir[MAX_PATH] = { 0 };

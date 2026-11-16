@@ -16,15 +16,13 @@
         std::lock_guard<std::recursive_mutex> lock(g_Mutex);
         auto it = g_FileIndex.find(NormalizePath(relativePath)); if (it == g_FileIndex.end()) return false;
         if (it->second.isLooseFile) return CopyFileW(it->second.looseFilePath.c_str(), destPath, FALSE);
-        if (g_ArchiveHandle == INVALID_HANDLE_VALUE) return false;
+        if (!HasArchiveSource()) return false;
 
-        LARGE_INTEGER offset = {};
-        offset.QuadPart = it->second.offset;
-        if (!g_RawSetFilePointerEx(g_ArchiveHandle, offset, nullptr, FILE_BEGIN)) return false;
+        if (!SeekArchiveBytes(it->second.offset, FILE_BEGIN)) return false;
 
         std::vector<BYTE> stored(it->second.size);
         if (it->second.size > 0
-            && !ReadArchiveBytes(g_ArchiveHandle, stored.data(), it->second.size)) {
+            && !ReadArchiveBytes(stored.data(), it->second.size)) {
             return false;
         }
 

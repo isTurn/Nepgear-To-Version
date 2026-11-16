@@ -1,5 +1,10 @@
 #include "pch.h"
+// The proxy host is selected at build time (-p:NepgearProxy=winmm|version).
+#ifdef NEPGEAR_PROXY_VERSION
+#include "ProxyVersion.h"
+#else
 #include "Proxy.h"
+#endif
 #include "hooks/config.h"
 #include "hooks/utils.h"
 #include "hooks/font_hook.h"

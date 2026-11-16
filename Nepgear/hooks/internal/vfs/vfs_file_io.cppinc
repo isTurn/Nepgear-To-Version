@@ -91,20 +91,17 @@
     static std::shared_ptr<const std::vector<BYTE>> GetDecompressedData(
         VirtualFileEntry& entry) {
         if (entry.decompressedData) return entry.decompressedData;
-        if (g_ArchiveHandle == INVALID_HANDLE_VALUE
-            || entry.size >= entry.decompressedSize) {
+        if (!HasArchiveSource() || entry.size >= entry.decompressedSize) {
             return {};
         }
 
-        LARGE_INTEGER offset = {};
-        offset.QuadPart = entry.offset;
-        if (!g_RawSetFilePointerEx(g_ArchiveHandle, offset, nullptr, FILE_BEGIN)) {
+        if (!SeekArchiveBytes(entry.offset, FILE_BEGIN)) {
             return {};
         }
 
         std::vector<BYTE> compressed(entry.size);
         if (entry.size > 0
-            && !ReadArchiveBytes(g_ArchiveHandle, compressed.data(), entry.size)) {
+            && !ReadArchiveBytes(compressed.data(), entry.size)) {
             return {};
         }
 
@@ -209,14 +206,20 @@
 
         if (vfh->decompressedData) {
             memcpy(b, vfh->decompressedData->data() + readPosition, toRead); br = toRead;
-        } else {
-            HANDLE hSrc = vfh->isLooseFile ? vfh->looseFileHandle : vfh->archiveHandle;
-            LARGE_INTEGER s; s.QuadPart = (vfh->isLooseFile ? 0 : vfh->entry->offset) + readPosition;
-            if (!g_RawSetFilePointerEx(hSrc, s, NULL, FILE_BEGIN)
-                || !g_RawReadFile(hSrc, b, toRead, &br, NULL)) {
+        } else if (vfh->isLooseFile) {
+            LARGE_INTEGER s; s.QuadPart = readPosition;
+            if (!g_RawSetFilePointerEx(vfh->looseFileHandle, s, NULL, FILE_BEGIN)
+                || !g_RawReadFile(vfh->looseFileHandle, b, toRead, &br, NULL)) {
                 if (r) *r = 0;
                 return FALSE;
             }
+        } else {
+            if (!SeekArchiveBytes(vfh->entry->offset + readPosition, FILE_BEGIN)
+                || !ReadArchiveBytes(b, toRead)) {
+                if (r) *r = 0;
+                return FALSE;
+            }
+            br = toRead;
         }
         if (!o) vfh->position += br;
         else {

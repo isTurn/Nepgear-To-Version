@@ -12,12 +12,51 @@ static bool CanReadArchiveBytes(LONGLONG cursor, LONGLONG byteCount, LONGLONG ar
     return cursor >= 0 && byteCount >= 0 && cursor <= archiveSize && byteCount <= archiveSize - cursor;
 }
 
-static bool ReadArchiveBytes(HANDLE archive, void* buffer, DWORD byteCount) {
+static bool HasArchiveSource() {
+    return g_ArchiveEmbedded || g_ArchiveHandle != INVALID_HANDLE_VALUE;
+}
+
+// Both archive sources (external .chs handle and embedded byte array) are read
+// through the same cursor helpers so the index parser and the readers below
+// never need to care where the bytes live.
+static bool SeekArchiveBytes(LONGLONG distance, DWORD method) {
+    if (g_ArchiveEmbedded) {
+        LONGLONG base = 0;
+        if (method == FILE_CURRENT) base = g_ArchiveCursor;
+        else if (method == FILE_END) base = g_ArchiveSize;
+        else if (method != FILE_BEGIN) return false;
+        if (base < 0 || base > g_ArchiveSize) return false;
+        // Compare against the remaining span instead of doing arithmetic that
+        // could overflow on a corrupted archive.
+        if (distance > g_ArchiveSize - base || distance < -base) return false;
+        g_ArchiveCursor = base + distance;
+        return true;
+    }
+    if (g_ArchiveHandle == INVALID_HANDLE_VALUE) return false;
+
+    LARGE_INTEGER delta = {};
+    delta.QuadPart = distance;
+    return g_RawSetFilePointerEx(g_ArchiveHandle, delta, nullptr, method) != FALSE;
+}
+
+static bool ReadArchiveBytes(void* buffer, DWORD byteCount) {
+    if (g_ArchiveEmbedded) {
+        if (byteCount == 0) return true;
+        if (!g_EmbeddedArchiveBytes || g_ArchiveCursor < 0
+            || static_cast<LONGLONG>(byteCount) > g_ArchiveSize - g_ArchiveCursor) {
+            return false;
+        }
+        memcpy(buffer, g_EmbeddedArchiveBytes + g_ArchiveCursor, byteCount);
+        g_ArchiveCursor += byteCount;
+        return true;
+    }
+    if (g_ArchiveHandle == INVALID_HANDLE_VALUE) return false;
+
     BYTE* output = static_cast<BYTE*>(buffer);
     DWORD totalRead = 0;
     while (totalRead < byteCount) {
         DWORD bytesRead = 0;
-        if (!g_RawReadFile(archive, output + totalRead, byteCount - totalRead, &bytesRead, nullptr)
+        if (!g_RawReadFile(g_ArchiveHandle, output + totalRead, byteCount - totalRead, &bytesRead, nullptr)
             || bytesRead == 0) {
             return false;
         }
@@ -26,17 +65,17 @@ static bool ReadArchiveBytes(HANDLE archive, void* buffer, DWORD byteCount) {
     return true;
 }
 
-static bool ReadArchiveIndex(HANDLE archive, std::vector<VFS::VirtualFileEntry>& entries) {
-    LARGE_INTEGER archiveSize = {};
-    if (!GetFileSizeEx(archive, &archiveSize) || archiveSize.QuadPart < static_cast<LONGLONG>(sizeof(int))) {
+static bool ReadArchiveIndex(LONGLONG archiveSize, std::vector<VFS::VirtualFileEntry>& entries) {
+    if (archiveSize < static_cast<LONGLONG>(sizeof(int))) {
         return ArchiveFormatError();
     }
+    g_ArchiveSize = archiveSize;
+    g_ArchiveCursor = 0;
 
-    LARGE_INTEGER beginning = {};
-    if (!g_RawSetFilePointerEx(archive, beginning, nullptr, FILE_BEGIN)) return false;
+    if (!SeekArchiveBytes(0, FILE_BEGIN)) return false;
 
     int count = 0;
-    if (!ReadArchiveBytes(archive, &count, sizeof(count))
+    if (!ReadArchiveBytes(&count, sizeof(count))
         || count < 0 || count > kMaxArchiveEntries) {
         return ArchiveFormatError();
     }
@@ -47,18 +86,18 @@ static bool ReadArchiveIndex(HANDLE archive, std::vector<VFS::VirtualFileEntry>&
 
     for (int i = 0; i < count; ++i) {
         int pathLength = 0;
-        if (!CanReadArchiveBytes(cursor, sizeof(pathLength), archiveSize.QuadPart)
-            || !ReadArchiveBytes(archive, &pathLength, sizeof(pathLength))) {
+        if (!CanReadArchiveBytes(cursor, sizeof(pathLength), archiveSize)
+            || !ReadArchiveBytes(&pathLength, sizeof(pathLength))) {
             return ArchiveFormatError();
         }
         cursor += sizeof(pathLength);
         if (pathLength <= 0 || pathLength > kMaxArchivePathBytes
-            || !CanReadArchiveBytes(cursor, pathLength, archiveSize.QuadPart)) {
+            || !CanReadArchiveBytes(cursor, pathLength, archiveSize)) {
             return ArchiveFormatError();
         }
 
         std::vector<char> encodedPath(static_cast<size_t>(pathLength) + 1, '\0');
-        if (!ReadArchiveBytes(archive, encodedPath.data(), static_cast<DWORD>(pathLength))) {
+        if (!ReadArchiveBytes(encodedPath.data(), static_cast<DWORD>(pathLength))) {
             return ArchiveFormatError();
         }
         cursor += pathLength;
@@ -73,14 +112,14 @@ static bool ReadArchiveIndex(HANDLE archive, std::vector<VFS::VirtualFileEntry>&
         int decompressedSize = 0;
         int storedSize = 0;
         constexpr LONGLONG sizeFieldBytes = sizeof(decompressedSize) + sizeof(storedSize);
-        if (!CanReadArchiveBytes(cursor, sizeFieldBytes, archiveSize.QuadPart)
-            || !ReadArchiveBytes(archive, &decompressedSize, sizeof(decompressedSize))
-            || !ReadArchiveBytes(archive, &storedSize, sizeof(storedSize))) {
+        if (!CanReadArchiveBytes(cursor, sizeFieldBytes, archiveSize)
+            || !ReadArchiveBytes(&decompressedSize, sizeof(decompressedSize))
+            || !ReadArchiveBytes(&storedSize, sizeof(storedSize))) {
             return ArchiveFormatError();
         }
         cursor += sizeFieldBytes;
         if (decompressedSize < 0 || storedSize < 0 || storedSize > decompressedSize
-            || !CanReadArchiveBytes(cursor, storedSize, archiveSize.QuadPart)) {
+            || !CanReadArchiveBytes(cursor, storedSize, archiveSize)) {
             return ArchiveFormatError();
         }
 
@@ -92,9 +131,7 @@ static bool ReadArchiveIndex(HANDLE archive, std::vector<VFS::VirtualFileEntry>&
         entry.isLooseFile = false;
         entries.push_back(std::move(entry));
 
-        LARGE_INTEGER skip = {};
-        skip.QuadPart = storedSize;
-        if (!g_RawSetFilePointerEx(archive, skip, nullptr, FILE_CURRENT)) return false;
+        if (!SeekArchiveBytes(storedSize, FILE_CURRENT)) return false;
         cursor += storedSize;
     }
 
@@ -125,6 +162,21 @@ static ULONGLONG ComputeArchiveCacheKey(HANDLE archive, const wchar_t* archivePa
             info.ftLastWriteTime.dwLowDateTime,
         };
         for (DWORD value : values) hash = (hash ^ value) * prime;
+    }
+    return hash;
+}
+
+static ULONGLONG ComputeEmbeddedArchiveCacheKey() {
+    constexpr ULONGLONG offsetBasis = 1469598103934665603ull;
+    constexpr ULONGLONG prime = 1099511628211ull;
+
+    // Embedded bytes never change between runs, so the size plus a head sample
+    // is enough to invalidate the materialised cache after a rebuild.
+    ULONGLONG hash = offsetBasis ^ 0x424D4545ull;
+    hash = (hash ^ static_cast<ULONGLONG>(g_EmbeddedArchiveByteCount)) * prime;
+    const LONGLONG sample = g_EmbeddedArchiveByteCount < 4096 ? g_EmbeddedArchiveByteCount : 4096;
+    for (LONGLONG i = 0; i < sample; ++i) {
+        hash = (hash ^ g_EmbeddedArchiveBytes[i]) * prime;
     }
     return hash;
 }

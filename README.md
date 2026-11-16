@@ -1,6 +1,12 @@
 # Nepgear
 
-面向日文 Galgame 的 DLL 劫持与 Hook 框架。伪装成 `winmm.dll` 随游戏启动，提供区域模拟、字体替换、文本转换、文件重定向和引擎专用适配。
+**给 Winlator 等 Android 模拟器用的 Galgame 汉化修复方案。**
+
+日文 Galgame 的汉化补丁一般以 `.chs` 数据包 + Windows 侧前置加载器的形式分发，那个加载器要做三件事：从系统目录取真身 DLL、改进程的区域与代码页、把替换字体塞进进程。这套逻辑只在桌面 Windows 上成立。原封不动搬进 Winlator（Wine + Box86 / Box64）这类容器后，前置条件全都不在了——真身 DLL 的取法不匹配、locale 改不动、字体装不上，于是补丁加载不上、文本乱码，严重时启动即崩。**这类问题改游戏文件或调模拟器设置都解决不了**：原来那套「`.chs` + 前置加载器」在模拟器上没有落地条件，照搬必然失败。
+
+所以才有了这个项目。Nepgear 保留 `.chs` 的数据格式，只把加载方式换掉：不再靠独立加载器，而是把补丁数据和全部修复做进一个游戏本来就会导入的系统 DLL。产物伪装成 `version.dll` 放在游戏目录，随游戏启动自动生效；17 个 `Ver*` 导出照旧转发给系统真实 `version.dll`，游戏原有功能不受影响。`.chs` 里的补丁数据可以整体内嵌进 DLL，部署时只留 `version.dll` + `Nepgear.ini`，容器里不需要任何额外加载器。
+
+在桌面 Windows 上同样可用，但它的目标场景是模拟器。
 
 支持 x86 / x64。多数 Galgame 为 32 位，通常用 x86 版本。
 
@@ -8,7 +14,7 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| DLL 代理 | 伪装 `winmm.dll`，导出转发给系统真实 DLL，不改动游戏文件 |
+| DLL 代理 | 伪装 `version.dll`，17 个导出转发给系统真实 DLL，不改动游戏文件 |
 | 区域模拟 | 内置 Locale Emulator Plus，以日文 locale 重启进程 |
 | 字体 Hook | 替换字体、缩放、字重、字距、垂直度量、字符集伪装 |
 | 文本替换 | 日文旧字体↔繁体、繁简互转，共三张映射表 |
@@ -31,9 +37,31 @@ BGI / Buriko、Artemis（含 Legacy）、KiriKiri / TVP、EntisGLS、Softpal、E
 build.bat              两个架构 Release
 build.bat x86          仅 32 位
 build.bat x64          仅 64 位
+build.bat x86 nopopup  不编译启动弹窗
 build.bat all rebuild  全量重建
 build.bat x86 debug    Debug 配置
 ```
+
+产物固定为 `version.dll`，转发系统 `version.dll` 的 17 个 `Ver*` 导出；`TargetName`、代理头和 x64 汇编跳板都指向它。
+
+### 启动弹窗（补丁作者信息）
+
+启动时那个「游玩通知」有两个开关，编译期和运行期各一层：
+
+| 层 | 开关 | 效果 |
+| --- | --- | --- |
+| 编译期 | `NEPGEAR_ENABLE_STARTUP_POPUP=0` | 整段提示**连同字符串一起编掉**，DLL 里搜不到作者信息，也不再有 `MessageBox` 调用 |
+| 运行期 | `Nepgear.ini` → `[System] ShowStartupPopup=0` | 代码仍在，运行时直接跳过；改 ini 即可，不用重编 |
+
+编译期默认仍为 1。关闭方式任选：
+
+```bat
+build.bat x86 nopopup                              :: build.bat 位置参数
+python 编译\build_chs_embed.py Nepgear.chs x86 --no-popup
+msbuild Nepgear.sln -p:Configuration=Release -p:Platform=Win32 -p:NepgearStartupPopup=0
+```
+
+切换这个开关会走独立的中间目录（`obj\<平台>\<配置>\popup0|1\`），所以不会出现改了宏却复用旧 obj、弹窗照样出现的情况。
 
 `build_x86.bat` / `build_x64.bat` 是单架构的简写入口。也可以直接用 Visual Studio 打开 `Nepgear.sln`，三个工程（Nepgear、Packer、Unpacker）都在里面。
 
@@ -41,28 +69,51 @@ build.bat x86 debug    Debug 配置
 
 | 架构 | 输出目录 |
 | --- | --- |
-| x86 | `Release\winmm.dll`、`Packer.exe`、`Unpacker.exe` |
-| x64 | `x64\Release\winmm.dll`、`Packer.exe`、`Unpacker.exe` |
+| x86 | `Release\version.dll`、`Packer.exe`、`Unpacker.exe` |
+| x64 | `x64\Release\version.dll`、`Packer.exe`、`Unpacker.exe` |
 
-Release 构建有两点和常规工程不同。一是 `winmm.dll` 出来就是 UPX 压缩版（约 39%），压缩内置在 MSBuild 流程里，先压临时副本、`upx -t` 校验通过才覆盖输出，中断不会留下损坏文件。二是不生成 `.pdb` / `.lib` / `.exp`，输出目录只有可执行文件。
+Release 构建始终输出**未压缩**的原始 DLL，工程里没有 UPX 打包步骤，PE 里也就没有 UPX 段，可直接用常规工具查看。另外不生成 `.pdb` / `.lib` / `.exp`，输出目录只有可执行文件。
 
-需要 PDB 调试时设 `NEPGEAR_SKIP_PACK=1` 再用 `build.bat` 构建，或编 Debug 配置。直接调用 MSBuild 时使用 `/p:NepgearSkipPack=1`。
+### 把 .chs 内嵌进 DLL
 
-UPX 5.1.1 随仓库放在 `tools/upx/`。
+默认构建出的代理 DLL 在运行时读游戏目录里的 `Nepgear.chs`。想让 DLL 自带补丁数据（部署只留 `version.dll` + `Nepgear.ini`），再用一键脚本把 `.chs` 作为 RCDATA 资源打进去。**模拟器上推荐用这种形态**：容器里少一层文件就少一处出错的地方。
+
+```bat
+python 编译\build_chs_embed.py Nepgear.chs x86    :: 产物 Release\version.dll（预解压、未压缩）
+python 编译\build_chs_embed.py Nepgear.chs all    :: 两个架构
+python 编译\build_chs_embed.py --clean            :: 去掉内嵌，恢复普通构建
+```
+
+脚本把 `.chs` 里每个条目**预解压**后写进 `Nepgear\chs_payload.dat`，生成的 DLL 读取归档时不再做任何 LZMS 解压；输出保持未压缩。这是唯一的构建形态，没有更小体积的备选。
+
+脚本随后生成 `Nepgear\chs_payload.rc` 并调用 `build.bat`。`Nepgear.vcxproj` 里这项带 `Condition`，所以没有资源的工程照旧能编。
+
+运行时优先级：游戏目录（或重定向目录）里的 `Nepgear.chs` > DLL 内嵌数据；松散文件目录始终优先于归档。日志 `Nepgear.log` 里 `[VFS] Initialized ... (embedded archive)` 表示走的是内嵌数据。
+
+细节、手动步骤和排查见 [编译\编译教程.txt](编译/编译教程.txt)。
 
 ## 部署
 
 复制到游戏主 EXE 所在目录：
 
-1. `winmm.dll` — 架构必须与游戏进程一致
+1. `version.dll` — 架构必须与游戏进程一致
 2. `Nepgear.ini` — 配置文件，**必须存为 UTF-16 LE**，缺失会直接弹窗退出
 3. 字体文件 — 文件名与 ini 里的 `FileName` 一致
 
-游戏启动时会加载同目录下的 `winmm.dll`，Nepgear 把原有函数调用转发给系统真正的 `winmm.dll`，所以不影响音频功能。
+游戏启动时会加载同目录下的 `version.dll`，Nepgear 把原有调用转发给系统真正的 `version.dll`，游戏原有功能不受影响。（Winlator 这类容器默认优先加载内建 DLL，需要额外一条覆盖设置，见下面「Winlator / 模拟器」。）
 
 开启 `[LocaleEmulator] Enable=1` 时还需要把官方 LEP 2.x 的运行时 DLL 放进重定向文件夹（默认 `Nepgear/`）。同位数启动至少需要对应的 `LoaderDll` 与 `LocaleEmulatorPlus`；跨位数子进程需要同时提供同版本的 `LoaderDll_x86.dll`、`LocaleEmulatorPlus_x86.dll`、`LoaderDll_x64.dll`、`LocaleEmulatorPlus_x64.dll`。这些运行时不随仓库分发。
 
 已验证官方 LEP **v2.0.6.0**，并兼容 v2.0.0.0 的早期 2.x 配置接口。接口说明和字体更新对照见 [兼容更新说明](docs/compatibility.md)。
+
+### Winlator / 模拟器
+
+部署方式与桌面完全一致，三个文件丢进游戏主 EXE 目录即可，容器里**不需要**再放原汉化的加载器或 `.chs`。额外注意两点：
+
+1. **让容器加载目录里这一份。** Wine 优先加载内建的 `version.dll`，不设置覆盖时本地文件根本不会被读到（表现为补丁毫无反应、日志也没有输出）。在容器环境变量或该游戏的快捷方式里加一条 `WINEDLLOVERRIDES=version=n,b`，需要在启动游戏前生效。
+2. **位数对齐。** 32 位游戏用 x86 产物，且容器的 Wine 位数要能跑 32 位进程；两者不匹配时 DLL 直接加载失败。
+
+想确认到底加载了哪一份，给容器加 `WINEDEBUG=+loaddll`，日志里应能看到从**游戏目录**读取 `version.dll`；如果出现的是 Wine 内建路径，说明第 1 条没生效。
 
 ## 配置
 
@@ -218,7 +269,6 @@ Nepgear/            主 DLL 工程
   font/             字体表修补（name / cmap / OS/2 / hhea）
 Common/             Packer 与 Unpacker 共用头文件
 Packer/ Unpacker/   资源打包工具
-tools/upx/          随仓库固定的 UPX 5.1.1
 tests/              原生区域、字体和 KRKR 接口回归探针
 ```
 

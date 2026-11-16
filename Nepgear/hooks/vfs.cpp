@@ -15,6 +15,11 @@
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Shell32.lib")
 
+// Optional .chs payload shipped inside the DLL as an RCDATA resource. It is
+// added by 编译/build_chs_embed.py; a build without that resource simply reads
+// the external archive and behaves exactly as before.
+#define NEPGEAR_CHS_RESOURCE_ID 101
+
 #include "internal/vfs/vfs_state.cppinc"
 #include "internal/vfs/vfs_paths.cppinc"
 #include "internal/vfs/vfs_archive.cppinc"
