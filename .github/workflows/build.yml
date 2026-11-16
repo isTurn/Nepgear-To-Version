@@ -74,14 +74,18 @@ jobs:
         env:
           ARCH: ${{ github.event.inputs.arch || 'x86' }}
         run: |
-          $expected = switch ($env:ARCH) {
-            'all' { @('Release\version.dll', 'x64\Release\version.dll') }
-            'x64' { @('x64\Release\version.dll') }
-            default { @('Release\version.dll') }
+          $dlls = @()
+          if ($env:ARCH -eq 'all') {
+            $dlls += 'Release\version.dll'
+            $dlls += 'x64\Release\version.dll'
+          } elseif ($env:ARCH -eq 'x64') {
+            $dlls += 'x64\Release\version.dll'
+          } else {
+            $dlls += 'Release\version.dll'
           }
-          $missing = @($expected | Where-Object { -not (Test-Path $_) })
+          $missing = @($dlls | Where-Object { -not (Test-Path $_) })
           if ($missing.Count -gt 0) { throw "缺少产物: $($missing -join ', ')" }
-          python '编译\check_dll.py' @expected
+          python '编译\check_dll.py' @dlls
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 整理产物
