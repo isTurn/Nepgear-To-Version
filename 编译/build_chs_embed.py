@@ -188,7 +188,11 @@ def run_build(targets, rebuild, proxy, popup):
     if not build_bat.exists():
         raise RuntimeError("build.bat not found at %s" % build_bat)
 
-    command = ['cmd', '/c', str(build_bat)] + targets + [proxy]
+    # build.bat takes a single architecture: repeating it ("x86 x64") would just
+    # let the last one win, so collapse the pair into its "all" keyword.
+    arch = "all" if set(targets) == {"x86", "x64"} else targets[0]
+
+    command = ['cmd', '/c', str(build_bat), arch, proxy]
     command.append("popup" if popup else "nopopup")
     if rebuild:
         command.append("rebuild")
