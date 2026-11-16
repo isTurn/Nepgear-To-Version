@@ -1,5 +1,7 @@
 # Nepgear
 
+[![build](https://github.com/isTurn/Nepgear-To-Version/actions/workflows/build.yml/badge.svg)](https://github.com/isTurn/Nepgear-To-Version/actions/workflows/build.yml)
+
 **给 Winlator 等 Android 模拟器用的 Galgame 汉化修复方案。**
 
 日文 Galgame 的汉化补丁一般以 `.chs` 数据包 + Windows 侧前置加载器的形式分发，那个加载器要做三件事：从系统目录取真身 DLL、改进程的区域与代码页、把替换字体塞进进程。这套逻辑只在桌面 Windows 上成立。原封不动搬进 Winlator（Wine + Box86 / Box64）这类容器后，前置条件全都不在了——真身 DLL 的取法不匹配、locale 改不动、字体装不上，于是补丁加载不上、文本乱码，严重时启动即崩。**这类问题改游戏文件或调模拟器设置都解决不了**：原来那套「`.chs` + 前置加载器」在模拟器上没有落地条件，照搬必然失败。
@@ -73,6 +75,23 @@ msbuild Nepgear.sln -p:Configuration=Release -p:Platform=Win32 -p:NepgearStartup
 | x64 | `x64\Release\version.dll`、`Packer.exe`、`Unpacker.exe` |
 
 Release 构建始终输出**未压缩**的原始 DLL，工程里没有 UPX 打包步骤，PE 里也就没有 UPX 段，可直接用常规工具查看。另外不生成 `.pdb` / `.lib` / `.exp`，输出目录只有可执行文件。
+
+### 在 GitHub 上构建（不装 VS）
+
+`.github/workflows/build.yml` 让整条流水线跑在 GitHub 的 Windows runner 上，本地什么都不用装：
+
+- **推送到 `main` / 提 PR** → 自动构建一次 x86，跑完在这条运行记录的 **Artifacts** 里下载 `nepgear-version-dll-x86`（含 `x86\version.dll`、`Nepgear.ini`、`Packer.exe`、`Unpacker.exe`）。
+- **手动触发** → Actions → `build` → *Run workflow*，可选目标架构（`x86` / `x64` / `all`）、是否编入启动弹窗、是否全量重建。
+- **打 tag** → 推一个 `v*` 开头的 tag（如 `git tag v1.0.0 && git push origin v1.0.0`），构建通过后自动创建 Release 并附上 `Nepgear-<tag>.zip`。
+
+CI 里执行的就是两条本地命令，没有另一套构建逻辑：
+
+```bat
+python 编译\build_chs_embed.py Nepgear.chs x86
+python 编译\check_dll.py Release\version.dll
+```
+
+`编译\check_dll.py` 是产物校验：核对 PE 架构与路径相符、**不存在 UPX 段**、`RCDATA` 资源 `101` 存在且体积对得上。本地构建完也可以自己跑一遍，参数换成 `x64\Release\version.dll` 即可。
 
 ### 把 .chs 内嵌进 DLL
 

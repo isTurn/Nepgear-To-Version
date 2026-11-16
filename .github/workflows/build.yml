@@ -1,0 +1,120 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 目标架构
+        type: choice
+        options: [x86, x64, all]
+        default: x86
+      popup:
+        description: 编入启动弹窗（补丁作者信息）
+        type: boolean
+        default: true
+      rebuild:
+        description: 全量重建
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
+concurrency:
+  group: build-${{ github.ref }}-${{ github.event.inputs.arch }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: version.dll (${{ github.event.inputs.arch || 'x86' }})
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 工具链版本
+        shell: pwsh
+        run: |
+          python --version
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+
+      - name: 构建（解包 Nepgear.chs 并内嵌进 DLL）
+        shell: pwsh
+        env:
+          ARCH: ${{ github.event.inputs.arch || 'x86' }}
+          POPUP: ${{ github.event.inputs.popup || 'true' }}
+          REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
+        run: |
+          $script = Join-Path $PWD '编译\build_chs_embed.py'
+          $argv = @($script, 'Nepgear.chs', $env:ARCH)
+          if ($env:POPUP -eq 'false') { $argv += '--no-popup' }
+          if ($env:REBUILD -eq 'true') { $argv += '--rebuild' }
+          Write-Host "python $argv"
+          python @argv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 校验产物
+        shell: pwsh
+        run: |
+          $dlls = @()
+          if (Test-Path 'Release\version.dll')     { $dlls += 'Release\version.dll' }
+          if (Test-Path 'x64\Release\version.dll') { $dlls += 'x64\Release\version.dll' }
+          if ($dlls.Count -eq 0) { throw '没有产出 version.dll' }
+          python '编译\check_dll.py' @dlls
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 整理产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'out\x86', 'out\x64' | Out-Null
+          foreach ($arch in @('x86', 'x64')) {
+            $dir = if ($arch -eq 'x86') { 'Release' } else { 'x64\Release' }
+            if (Test-Path "$dir\version.dll") {
+              Copy-Item "$dir\version.dll" "out\$arch\version.dll"
+              Copy-Item 'Nepgear.ini' "out\$arch\Nepgear.ini"
+            }
+            if (Test-Path "$dir\Packer.exe") {
+              Copy-Item "$dir\Packer.exe", "$dir\Unpacker.exe" "out\$arch\"
+            }
+          }
+          Get-ChildItem -Recurse out -File | Format-Table FullName, Length -AutoSize
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: nepgear-version-dll-${{ github.event.inputs.arch || 'x86' }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 打 tag 时发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          Compress-Archive -Path 'out\*' -DestinationPath "Nepgear-$env:TAG.zip" -Force
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG --title "Nepgear $env:TAG" --generate-notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $env:TAG "Nepgear-$env:TAG.zip" --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
