@@ -65,7 +65,7 @@ Release 构建始终输出**未压缩**的原始 DLL，工程里没有 UPX 打�
 `.github/workflows/build.yml` 让整条流水线跑在 GitHub 的 Windows runner 上，本地什么都不用装：
 
 - **推送到 `main` / 提 PR** → 自动构建一次 x86，跑完在这条运行记录的 **Artifacts** 里下载 `nepgear-version-dll-x86`（含 `x86\version.dll`、`Nepgear.ini`、`Packer.exe`、`Unpacker.exe`）。
-- **手动触发** → Actions → `build` → *Run workflow*，可选目标架构（`x86` / `x64` / `all`）、是否编入启动弹窗、是否全量重建。
+- **手动触发** → Actions → `build` → *Run workflow*，可选目标架构（`x86` / `x64` / `all`）、是否全量重建。
 - **打 tag** → 推一个 `v*` 开头的 tag（如 `git tag v1.0.0 && git push origin v1.0.0`），构建通过后自动创建 Release 并附上 `Nepgear-<tag>.zip`。
 
 CI 里执行的就是两条本地命令，没有另一套构建逻辑：
@@ -97,30 +97,33 @@ python 编译\build_chs_embed.py --clean            :: 去掉内嵌，恢复普�
 
 ### 不装 VS：图形化转换器（NepgearEmbed.exe）
 
-上面两条路都要装 Visual Studio 或 Python。如果只是想把手上的 `.chs` 变成 `version.dll`，用这个独立小工具：它自己带着一份已经编译好的 DLL 当模板，只把里面的补丁数据换掉，**不需要 VS、不需要 Python，也不依赖系统解压组件**——拷贝到任何 Windows 机器、甚至直接放进 Winlator 容器里都能跑。
+上面两条路都要装 Visual Studio 或 Python。如果只是想把手上的 `.chs` 变成 `version.dll`，用这个独立小工具：它内嵌了 x86 / x64 两份 DLL 模板，转换时把补丁数据填进去，**不需要 VS、不需要 Python，也不依赖系统解压组件**——拷贝到任何 Windows 机器、甚至直接放进 Winlator 容器里都能跑。
 
-现成的可执行文件在 [Releases](https://github.com/isTurn/Nepgear-To-Version/releases) 里，下下来就能用。也可以自己用本机工具链编译一次：
+现成的可执行文件在 [Releases](https://github.com/isTurn/Nepgear-To-Version/releases) 里，下下来就能用（约 2 MB）。也可以自己用本机工具链编译一次：
 
 ```bat
 编译\build_embed_tool.bat        :: 产物 Release\NepgearEmbed.exe
 ```
 
-脚本会把 `Release\version.dll` 当作模板打进 exe（所以要先构建一次 x86 版本），然后编译出约 24 MB 的 `NepgearEmbed.exe`。
+脚本要先两个架构都构建一次（`build.bat all`），然后从 `Release\version.dll` 和 `x64\Release\version.dll` 各裁一份「骨架」打进 exe。所谓骨架就是把 RCDATA 补丁数据裁成 1 字节占位的 DLL——转换时这份资源反正会被 `.chs` 的数据整体替换，模板里存 23 MB 纯属浪费；裁掉之后整个工具从约 48 MB 缩到约 2 MB，转换结果一个字节都不变。
 
 用法：
 
 1. 双击打开，把 `.chs` 拖进窗口，或点「选择 .chs」；输出的 `version.dll` 默认写到 `.chs` 同目录，也可以自己改路径。
-2. 也可以走命令行，静默转换、不弹窗，方便脚本调用：
+2. **位数**：把游戏主 EXE 一起拖进窗口，工具会读它的 PE 头自动选对架构；没拖就按界面上的「32 位 / 64 位」生成。位数选错的话 `version.dll` 根本不会被加载，游戏直接按原样启动。
+3. 也可以走命令行，静默转换、不弹窗，方便脚本调用：
 
 ```bat
-Release\NepgearEmbed.exe Nepgear.chs
-Release\NepgearEmbed.exe Nepgear.chs D:\out\version.dll
+Release\NepgearEmbed.exe Nepgear.chs                                  :: 默认 32 位
+Release\NepgearEmbed.exe Nepgear.chs D:\out\version.dll --x64
+Release\NepgearEmbed.exe Nepgear.chs out\version.dll --game D:\game\game.exe   :: 按 exe 位数
 ```
 
-两点需要知道：
+几点需要知道：
 
 - **它只替换数据、不重新编译代码**。源码改了以后要重新跑一次 `build_embed_tool.bat`，否则 exe 里带的还是旧模板。
 - 转换是纯字节操作：读 `.chs`、逐条目预解压、重建资源节，几秒完成，输出未压缩。
+- exe 是 32 位的，但能生成 64 位 DLL——模板是整份内嵌的，跟运行工具的进程位数无关。
 
 **为什么它在 Wine / Winlator 上也能用**：`.chs` 里的条目是 LZMS 压缩的，Windows 上靠 `cabinet.dll` 的压缩 API 解压，而 Wine 里那套 API 是个空壳——`CreateDecompressor` 直接返回成功，`Decompress` 只把输入原样拷回去，于是会看到「LZMS 解压失败」。所以工程里自带了一份 LZMS 解码器（`Common/lzms_decode.h`），系统 API 不可用或产出与预期大小不符时自动接管。同一个解码器也在 `version.dll` 里，容器中直接读压缩过的 `Nepgear.chs` 同样没问题。
 

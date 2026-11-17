@@ -5,8 +5,8 @@
 // 这样任何 Windows 机器都能用，不需要 Visual Studio，也不需要 Python。
 //
 // 模板查找顺序：
-//   1. exe 同目录的 template.dll（想换新版宿主时放一份在这里即可）
-//   2. exe 内置资源（构建时由 编译\build_embed_tool.bat 打进去）
+//   1. exe 同目录的 template_x86.dll / template_x64.dll（想换新版宿主时放一份即可）
+//   2. exe 内置资源（构建时由 编译\build_embed_tool.bat 把两个架构的 DLL 打进去）
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdint>
+#include <cwchar>
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -35,9 +36,10 @@ namespace {
 
 // ---------------------------------------------------------------- 常量
 
-const DWORD kResourceId = 101;   // 与 hooks/vfs.cpp 的 NEPGEAR_CHS_RESOURCE_ID 一致
-const DWORD kRcDataType = 10;    // RT_RCDATA
-const int kTemplateResource = 1; // exe 内置模板的资源 ID
+const DWORD kResourceId = 101;      // 与 hooks/vfs.cpp 的 NEPGEAR_CHS_RESOURCE_ID 一致
+const DWORD kRcDataType = 10;       // RT_RCDATA
+const int kTemplateX86 = 1;         // exe 内置模板：32 位 version.dll
+const int kTemplateX64 = 2;         // exe 内置模板：64 位 version.dll
 
 const int IDC_SRC = 1001;
 const int IDC_SRC_BROWSE = 1002;
@@ -47,6 +49,11 @@ const int IDC_GO = 1005;
 const int IDC_LOG = 1006;
 const int IDC_BAR = 1007;
 const int IDC_STATUS = 1008;
+const int IDC_GAME = 1009;
+const int IDC_GAME_BROWSE = 1010;
+const int IDC_ARCH_X86 = 1011;
+const int IDC_ARCH_X64 = 1012;
+const int IDC_ARCH_HINT = 1013;
 
 const UINT WM_APP_LOG = WM_APP + 1;
 const UINT WM_APP_PROGRESS = WM_APP + 2;
@@ -56,7 +63,11 @@ const UINT WM_APP_DONE = WM_APP + 3;
 
 HWND g_hwnd = nullptr;
 HWND g_hSrc = nullptr;
+HWND g_hGame = nullptr;
 HWND g_hOut = nullptr;
+HWND g_hArchX86 = nullptr;
+HWND g_hArchX64 = nullptr;
+HWND g_hArchHint = nullptr;
 HWND g_hLog = nullptr;
 HWND g_hBar = nullptr;
 HWND g_hStatus = nullptr;
@@ -150,6 +161,65 @@ bool WriteAllBytes(const std::wstring& path, const std::vector<BYTE>& data, std:
         return false;
     }
     return true;
+}
+
+// 读 exe 的 PE 头判断位数。架构选错时 version.dll 根本不会被加载，所以只看
+// IMAGE_FILE_HEADER.Machine，不信文件名。顺带说明：PE32+ 的可选头魔数是 0x20B，
+// 但 Machine 更直接，也覆盖 ARM64 的情况。
+bool DetectPeBits(const std::wstring& path, bool& is64, std::wstring& err) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        err = Format(L"打不开 %s（错误 %lu）", path.c_str(), GetLastError());
+        return false;
+    }
+
+    LARGE_INTEGER fileSize = {};
+    GetFileSizeEx(file, &fileSize);
+
+    DWORD read = 0;
+    IMAGE_DOS_HEADER dos = {};
+    const bool dosOk = ReadFile(file, &dos, sizeof(dos), &read, nullptr) != FALSE &&
+                       read == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE;
+    if (!dosOk) {
+        CloseHandle(file);
+        err = L"不是有效的 Windows 程序（DOS 头不对）";
+        return false;
+    }
+
+    LARGE_INTEGER ntPos = {};
+    ntPos.QuadPart = dos.e_lfanew;
+    if (ntPos.QuadPart <= 0 ||
+        ntPos.QuadPart + 4 + (LONGLONG)sizeof(IMAGE_FILE_HEADER) > fileSize.QuadPart) {
+        CloseHandle(file);
+        err = L"不是有效的 Windows 程序（PE 头位置异常）";
+        return false;
+    }
+    SetFilePointerEx(file, ntPos, nullptr, FILE_BEGIN);
+
+    DWORD signature = 0;
+    IMAGE_FILE_HEADER fh = {};
+    const bool ntOk = ReadFile(file, &signature, 4, &read, nullptr) != FALSE && read == 4 &&
+                      ReadFile(file, &fh, sizeof(fh), &read, nullptr) != FALSE &&
+                      read == sizeof(fh);
+    CloseHandle(file);
+    if (!ntOk || signature != IMAGE_NT_SIGNATURE) {
+        err = L"不是有效的 Windows 程序（PE 签名不对）";
+        return false;
+    }
+
+    switch (fh.Machine) {
+    case IMAGE_FILE_MACHINE_I386:
+        is64 = false;
+        return true;
+    case IMAGE_FILE_MACHINE_AMD64:
+    case IMAGE_FILE_MACHINE_ARM64:
+        is64 = true;
+        return true;
+    default:
+        err = Format(L"不认识的可执行格式（Machine=0x%04X）", (unsigned)fh.Machine);
+        return false;
+    }
 }
 
 // ---------------------------------------------------------------- .chs -> payload
@@ -540,9 +610,14 @@ bool BuildResourceSection(std::vector<ResItem>& items, DWORD sectionRva,
 
 // 把 payload 写进模板 DLL 的 RCDATA 101，输出新的 DLL。
 bool RewriteDll(std::vector<BYTE>& templateBytes, const std::vector<BYTE>& payload,
-                const std::wstring& outPath, std::wstring& err) {
+                const std::wstring& outPath, bool want64, std::wstring& err) {
     pe::Image img;
     if (!pe::Parse(templateBytes, img, err)) return false;
+    if (img.pe64 != want64) {
+        err = want64 ? L"这份模板不是 64 位 DLL，生成不了 x64 产物"
+                     : L"这份模板不是 32 位 DLL，生成不了 x86 产物";
+        return false;
+    }
 
     IMAGE_DATA_DIRECTORY* resDir = pe::DataDirectory(img, 2);
     if (!resDir || resDir->VirtualAddress == 0 || resDir->Size == 0) {
@@ -714,41 +789,84 @@ bool RewriteDll(std::vector<BYTE>& templateBytes, const std::vector<BYTE>& paylo
     return true;
 }
 
-bool LoadTemplate(std::vector<BYTE>& out, std::wstring& err, std::wstring& source) {
+// 把完整的 DLL 裁成「骨架」：RCDATA 101 只留一个 1 字节的占位条目。
+// 转换时这份资源总会被用户的 .chs 整体覆盖，模板里存 23 MB 纯属浪费。
+// 构建脚本用它从当前的 Release\version.dll 现裁模板，保证模板与源码同步。
+bool StripTemplate(const std::wstring& inPath, const std::wstring& outPath, std::wstring& err) {
+    std::vector<BYTE> bytes;
+    if (!ReadAllBytes(inPath, bytes, err)) return false;
+    if (bytes.size() < sizeof(IMAGE_DOS_HEADER)) {
+        err = L"输入文件太小，不是有效的 PE";
+        return false;
+    }
+    const size_t ntOffset = (size_t)((const IMAGE_DOS_HEADER*)bytes.data())->e_lfanew;
+    if (ntOffset + 6 > bytes.size()) {
+        err = L"输入文件的 PE 头越界";
+        return false;
+    }
+    const WORD machine = *(const WORD*)(bytes.data() + ntOffset + 4);
+    if (machine != IMAGE_FILE_MACHINE_I386 && machine != IMAGE_FILE_MACHINE_AMD64) {
+        err = Format(L"不支持的 PE 架构 %#x", (unsigned)machine);
+        return false;
+    }
+    const bool is64 = (machine == IMAGE_FILE_MACHINE_AMD64);
+
+    // 结构与 BuildPayload 产出的完全一致：1 个条目、1 字节数据。内容无所谓，
+    // 保留合法结构只是为了让骨架自己也能被解析出来。
+    std::vector<BYTE> payload;
+    static const char kStubPath[] = "stub";
+    static const size_t kStubPathLen = sizeof(kStubPath) - 1;
+    AppendI32(payload, 1);
+    AppendI32(payload, (int32_t)kStubPathLen);
+    payload.insert(payload.end(), kStubPath, kStubPath + kStubPathLen);
+    AppendI32(payload, 1);
+    AppendI32(payload, 1);
+    payload.push_back(0);
+
+    return RewriteDll(bytes, payload, outPath, is64, err);
+}
+
+bool LoadTemplate(bool want64, std::vector<BYTE>& out, std::wstring& err,
+                  std::wstring& source) {
+    const wchar_t* arch = want64 ? L"x64" : L"x86";
+
     wchar_t exePath[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    const std::wstring external = DirNameOf(exePath) + L"\\template.dll";
+    const std::wstring external =
+        DirNameOf(exePath) + (want64 ? L"\\template_x64.dll" : L"\\template_x86.dll");
     if (GetFileAttributesW(external.c_str()) != INVALID_FILE_ATTRIBUTES) {
         if (!ReadAllBytes(external, out, err)) return false;
-        source = L"外置 template.dll";
+        source = L"外置 " + FileNameOf(external);
         return true;
     }
 
     HMODULE module = GetModuleHandleW(nullptr);
-    HRSRC res = FindResourceW(module, MAKEINTRESOURCEW(kTemplateResource), L"TEMPLATE");
+    HRSRC res = FindResourceW(module, MAKEINTRESOURCEW(want64 ? kTemplateX64 : kTemplateX86),
+                              L"TEMPLATE");
     if (!res) {
-        err = L"exe 里没有内置模板，同目录也没有 template.dll";
+        err = Format(L"exe 里没有内置 %s 模板，同目录也没有 template_%s.dll", arch, arch);
         return false;
     }
     const DWORD size = SizeofResource(module, res);
     HGLOBAL handle = LoadResource(module, res);
     const void* data = handle ? LockResource(handle) : nullptr;
     if (!data || size == 0) {
-        err = L"内置模板读取失败";
+        err = Format(L"内置 %s 模板读取失败", arch);
         return false;
     }
     out.assign((const BYTE*)data, (const BYTE*)data + size);
-    source = L"内置模板";
+    source = Format(L"内置模板 (%s)", arch);
     return true;
 }
 
-bool RunConvert(const std::wstring& chsPath, const std::wstring& outPath, std::wstring& message) {
+bool RunConvert(const std::wstring& chsPath, const std::wstring& outPath, bool want64,
+                std::wstring& message) {
     std::wstring err;
     std::vector<BYTE> tpl;
     std::wstring tplSource;
 
-    PostLog(L"[1/4] 载入模板 DLL");
-    if (!LoadTemplate(tpl, err, tplSource)) {
+    PostLog(want64 ? L"[1/4] 载入 x64 模板 DLL" : L"[1/4] 载入 x86 模板 DLL");
+    if (!LoadTemplate(want64, tpl, err, tplSource)) {
         message = err;
         return false;
     }
@@ -776,7 +894,7 @@ bool RunConvert(const std::wstring& chsPath, const std::wstring& outPath, std::w
                    g_rawTotal / 1048576.0));
 
     PostLog(L"[4/4] 写入内嵌资源并另存 DLL");
-    if (!RewriteDll(tpl, payload, outPath, err)) {
+    if (!RewriteDll(tpl, payload, outPath, want64, err)) {
         message = err;
         return false;
     }
@@ -789,8 +907,8 @@ bool RunConvert(const std::wstring& chsPath, const std::wstring& outPath, std::w
 
     PostProgress(100, L"完成");
     PostLog(Format(L"      已生成 %s（%llu 字节）", outPath.c_str(), (unsigned long long)size));
-    message = Format(L"生成成功：%s（%llu 字节）", FileNameOf(outPath).c_str(),
-                     (unsigned long long)size);
+    message = Format(L"生成成功：%s（%s，%llu 字节）", FileNameOf(outPath).c_str(),
+                     want64 ? L"x64" : L"x86", (unsigned long long)size);
     return true;
 }
 
@@ -820,12 +938,13 @@ int Scale(int value) { return (int)(value * g_scale + 0.5); }
 struct Job {
     std::wstring source;
     std::wstring output;
+    bool is64 = false;
 };
 
 DWORD WINAPI WorkerProc(LPVOID param) {
     std::unique_ptr<Job> job((Job*)param);
     std::wstring message;
-    const bool ok = RunConvert(job->source, job->output, message);
+    const bool ok = RunConvert(job->source, job->output, job->is64, message);
     PostMessageW(g_hwnd, WM_APP_DONE, ok ? 1 : 0, (LPARAM)new std::wstring(message));
     return 0;
 }
@@ -834,8 +953,12 @@ void SetBusy(bool busy) {
     InterlockedExchange(&g_busy, busy ? 1 : 0);
     EnableWindow(g_hGo, busy ? FALSE : TRUE);
     EnableWindow(g_hSrc, busy ? FALSE : TRUE);
+    EnableWindow(g_hGame, busy ? FALSE : TRUE);
     EnableWindow(g_hOut, busy ? FALSE : TRUE);
+    EnableWindow(g_hArchX86, busy ? FALSE : TRUE);
+    EnableWindow(g_hArchX64, busy ? FALSE : TRUE);
     EnableWindow(GetDlgItem(g_hwnd, IDC_SRC_BROWSE), busy ? FALSE : TRUE);
+    EnableWindow(GetDlgItem(g_hwnd, IDC_GAME_BROWSE), busy ? FALSE : TRUE);
     EnableWindow(GetDlgItem(g_hwnd, IDC_OUT_BROWSE), busy ? FALSE : TRUE);
     SetWindowTextW(g_hGo, busy ? L"处理中..." : L"开始生成");
 }
@@ -874,10 +997,13 @@ void StartConversion() {
     SendMessageW(g_hBar, PBM_SETPOS, 0, 0);
     SetWindowTextW(g_hStatus, L"开始");
 
+    const bool is64 = SendMessageW(g_hArchX64, BM_GETCHECK, 0, 0) == BST_CHECKED;
+
     SetBusy(true);
     auto* job = new Job();
     job->source = source;
     job->output = output;
+    job->is64 = is64;
     HANDLE thread = CreateThread(nullptr, 0, WorkerProc, job, 0, nullptr);
     if (!thread) {
         delete job;
@@ -886,6 +1012,39 @@ void StartConversion() {
         return;
     }
     CloseHandle(thread);
+}
+
+// 选中游戏主程序后立刻读位数并把单选框拨过去，用户仍然可以手动改回来
+// （有些游戏的主程序和外层启动器位数不一样）。
+void ApplyGameExe(const std::wstring& path) {
+    SetWindowTextW(g_hGame, path.c_str());
+
+    bool is64 = false;
+    std::wstring err;
+    if (!DetectPeBits(path, is64, err)) {
+        SetWindowTextW(g_hArchHint, (L"读不出位数：" + err).c_str());
+        return;
+    }
+
+    SendMessageW(is64 ? g_hArchX64 : g_hArchX86, BM_SETCHECK, BST_CHECKED, 0);
+    SendMessageW(is64 ? g_hArchX86 : g_hArchX64, BM_SETCHECK, BST_UNCHECKED, 0);
+    SetWindowTextW(g_hArchHint, is64 ? L"检测到 64 位，将生成 x64 的 version.dll"
+                                     : L"检测到 32 位，将生成 x86 的 version.dll");
+}
+
+void PickGame() {
+    wchar_t path[MAX_PATH] = L"";
+    OPENFILENAMEW dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = g_hwnd;
+    dialog.lpstrFilter = L"游戏主程序 (*.exe)\0*.exe\0所有文件\0*.*\0";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrTitle = L"选择游戏的 EXE（用它的位数决定生成哪个架构）";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetOpenFileNameW(&dialog)) return;
+
+    ApplyGameExe(path);
 }
 
 void PickSource() {
@@ -919,18 +1078,26 @@ void PickOutput() {
     SetWindowTextW(g_hOut, path);
 }
 
+bool EndsWith(const std::wstring& text, const wchar_t* suffix) {
+    const size_t length = wcslen(suffix);
+    return text.size() >= length && text.compare(text.size() - length, length, suffix) == 0;
+}
+
 void AcceptDrop(HDROP drop) {
     const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    std::wstring gamePath;
     for (UINT i = 0; i < count; ++i) {
         wchar_t path[MAX_PATH] = L"";
         if (!DragQueryFileW(drop, i, path, MAX_PATH)) continue;
         const std::wstring lower = LowerCase(FileNameOf(path));
-        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, L".chs") == 0) {
+        if (EndsWith(lower, L".chs")) {
             SetWindowTextW(g_hSrc, path);
             SetWindowTextW(g_hOut, (DirNameOf(path) + L"\\version.dll").c_str());
-            break;
+        } else if (EndsWith(lower, L".exe")) {
+            gamePath = path;
         }
     }
+    if (!gamePath.empty()) ApplyGameExe(gamePath);
     DragFinish(drop);
 }
 
@@ -956,19 +1123,31 @@ void BuildLayout() {
     g_hSrc = CreateControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 74, 14, 496, 26, IDC_SRC);
     CreateControl(L"BUTTON", L"浏览...", BS_PUSHBUTTON, 586, 14, 100, 26, IDC_SRC_BROWSE);
 
-    CreateControl(L"STATIC", L"输出到", SS_LEFT, 14, 56, 56, 20, -1);
-    g_hOut = CreateControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 74, 52, 496, 26, IDC_OUT);
-    CreateControl(L"BUTTON", L"另存为...", BS_PUSHBUTTON, 586, 52, 100, 26, IDC_OUT_BROWSE);
+    CreateControl(L"STATIC", L"游戏 EXE", SS_LEFT, 14, 56, 56, 20, -1);
+    g_hGame = CreateControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 74, 52, 496, 26, IDC_GAME);
+    CreateControl(L"BUTTON", L"浏览...", BS_PUSHBUTTON, 586, 52, 100, 26, IDC_GAME_BROWSE);
 
-    g_hGo = CreateControl(L"BUTTON", L"开始生成", BS_DEFPUSHBUTTON, 14, 92, 120, 30, IDC_GO);
-    g_hBar = CreateControl(PROGRESS_CLASSW, L"", PBS_SMOOTH, 146, 96, 540, 22, IDC_BAR);
+    CreateControl(L"STATIC", L"输出到", SS_LEFT, 14, 94, 56, 20, -1);
+    g_hOut = CreateControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 74, 90, 496, 26, IDC_OUT);
+    CreateControl(L"BUTTON", L"另存为...", BS_PUSHBUTTON, 586, 90, 100, 26, IDC_OUT_BROWSE);
+
+    g_hArchX86 = CreateControl(L"BUTTON", L"32 位 (x86)", BS_AUTORADIOBUTTON | WS_GROUP,
+                               74, 126, 106, 22, IDC_ARCH_X86);
+    g_hArchX64 = CreateControl(L"BUTTON", L"64 位 (x64)", BS_AUTORADIOBUTTON,
+                               188, 126, 106, 22, IDC_ARCH_X64);
+    g_hArchHint = CreateControl(L"STATIC", L"没选游戏 EXE 时，按这里选的位数生成",
+                                SS_LEFT | SS_ENDELLIPSIS, 306, 129, 380, 18, IDC_ARCH_HINT);
+    SendMessageW(g_hArchX86, BM_SETCHECK, BST_CHECKED, 0);
+
+    g_hGo = CreateControl(L"BUTTON", L"开始生成", BS_DEFPUSHBUTTON, 14, 160, 120, 30, IDC_GO);
+    g_hBar = CreateControl(PROGRESS_CLASSW, L"", PBS_SMOOTH, 146, 164, 540, 22, IDC_BAR);
     SendMessageW(g_hBar, PBM_SETRANGE32, 0, 100);
-    g_hStatus = CreateControl(L"STATIC", L"把 .chs 拖进窗口即可", SS_LEFT | SS_ENDELLIPSIS,
-                              14, 130, 672, 18, IDC_STATUS);
+    g_hStatus = CreateControl(L"STATIC", L"把 .chs 拖进窗口，顺便把游戏 EXE 拖进来可以自动选位数",
+                              SS_LEFT | SS_ENDELLIPSIS, 14, 198, 672, 18, IDC_STATUS);
 
     g_hLog = CreateControl(L"EDIT", L"",
                            WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-                           14, 154, 672, 268, IDC_LOG);
+                           14, 222, 672, 268, IDC_LOG);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1010,8 +1189,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
         if (id == IDC_SRC_BROWSE) PickSource();
+        else if (id == IDC_GAME_BROWSE) PickGame();
         else if (id == IDC_OUT_BROWSE) PickOutput();
-        else if (id == IDC_GO) StartConversion();
+        else if (id == IDC_ARCH_X86 || id == IDC_ARCH_X64) {
+            SetWindowTextW(g_hArchHint, L"按手动选择的位数生成");
+        } else if (id == IDC_GO) StartConversion();
         return 0;
     }
 
@@ -1064,13 +1246,44 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
             LocalFree(argv);
             return ok ? 0 : 1;
         }
-        if (argv && argc >= 2) {
-            const std::wstring source = argv[1];
-            const std::wstring output = (argc >= 3) ? argv[2]
-                                                        : (DirNameOf(source) + L"\\version.dll");
+        if (argv && argc >= 4 && std::wstring(argv[1]) == L"--strip") {
+            // 构建用：把带完整补丁数据的 DLL 裁成骨架模板，不弹窗。
+            const std::wstring stripIn = argv[2];
+            const std::wstring stripOut = argv[3];
             LocalFree(argv);
             std::wstring message;
-            return RunConvert(source, output, message) ? 0 : 1;
+            return StripTemplate(stripIn, stripOut, message) ? 0 : 1;
+        }
+        if (argv && argc >= 2) {
+            // NepgearEmbed.exe <in.chs> [out.dll] [--x64] [--game <game.exe>]
+            // --game 里那个 exe 的位数会覆盖 --x64/--x86，和界面上的行为一致。
+            std::wstring source;
+            std::wstring output;
+            std::wstring game;
+            bool is64 = false;
+            for (int i = 1; i < argc; ++i) {
+                const std::wstring arg = argv[i];
+                if (arg == L"--x64") {
+                    is64 = true;
+                } else if (arg == L"--x86") {
+                    is64 = false;
+                } else if (arg == L"--game" && i + 1 < argc) {
+                    game = argv[++i];
+                } else if (source.empty()) {
+                    source = arg;
+                } else if (output.empty()) {
+                    output = arg;
+                }
+            }
+            if (!game.empty()) {
+                bool gameIs64 = false;
+                std::wstring detectError;
+                if (DetectPeBits(game, gameIs64, detectError)) is64 = gameIs64;
+            }
+            if (output.empty()) output = DirNameOf(source) + L"\\version.dll";
+            LocalFree(argv);
+            std::wstring message;
+            return RunConvert(source, output, is64, message) ? 0 : 1;
         }
         if (argv) LocalFree(argv);
     }
@@ -1099,7 +1312,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     wc.hIconSm = wc.hIcon;
     RegisterClassExW(&wc);
 
-    RECT frame = {0, 0, Scale(700), Scale(440)};
+    RECT frame = {0, 0, Scale(700), Scale(522)};
     AdjustWindowRectEx(&frame, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE, 0);
 
     HWND hwnd = CreateWindowExW(

@@ -1,8 +1,12 @@
 ﻿#include <winver.h>
 
-// 内置模板：构建时由 编译\build_embed_tool.bat 从 Release\version.dll 复制而来。
-// 运行期用 FindResourceW(hInst, MAKEINTRESOURCE(1), L"TEMPLATE") 取出。
-1 TEMPLATE "template.dll"
+// 内置模板是「骨架」：构建时由 编译\build_embed_tool.bat 从完整 DLL 现裁出来的，
+// RCDATA 101 只剩 1 字节占位（转换时会被 .chs 的数据整体替换），所以每份不到 1 MB。
+//   1 = x86 骨架（来源 Release\version.dll）
+//   2 = x64 骨架（来源 x64\Release\version.dll）
+// 运行期按目标位数用 FindResourceW(hInst, MAKEINTRESOURCE(1|2), L"TEMPLATE") 取出。
+1 TEMPLATE "template_x86.dll"
+2 TEMPLATE "template_x64.dll"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 1,0,0,0

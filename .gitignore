@@ -28,7 +28,8 @@
 /Nepgear/chs_payload.dat
 
 # Template DLL copied in by 编译/build_embed_tool.bat (removed after build)
-/tools/NepgearEmbed/template.dll
+/tools/NepgearEmbed/template_x86.dll
+/tools/NepgearEmbed/template_x64.dll
 
 # Python caches
 __pycache__/
