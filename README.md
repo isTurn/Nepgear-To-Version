@@ -111,6 +111,43 @@ python 编译\build_chs_embed.py --clean            :: 去掉内嵌，恢复普�
 
 细节、手动步骤和排查见 [编译\编译教程.txt](编译/编译教程.txt)。
 
+### 不装 VS：图形化转换器（NepgearEmbed.exe）
+
+上面两条路都要装 Visual Studio 或 Python。如果只是想把手上的 `.chs` 变成 `version.dll`，用这个独立小工具：它自己带着一份已经编译好的 DLL 当模板，只把里面的补丁数据换掉，**不需要 VS、不需要 Python，也不依赖系统解压组件**——拷贝到任何 Windows 机器、甚至直接放进 Winlator 容器里都能跑。
+
+它不属于发布产物，需要用本机工具链编译一次：
+
+```bat
+编译\build_embed_tool.bat        :: 产物 Release\NepgearEmbed.exe
+```
+
+脚本会把 `Release\version.dll` 当作模板打进 exe（所以要先构建一次 x86 版本），然后编译出约 24 MB 的 `NepgearEmbed.exe`。
+
+用法：
+
+1. 双击打开，把 `.chs` 拖进窗口，或点「选择 .chs」；输出的 `version.dll` 默认写到 `.chs` 同目录，也可以自己改路径。
+2. 也可以走命令行，静默转换、不弹窗，方便脚本调用：
+
+```bat
+Release\NepgearEmbed.exe Nepgear.chs
+Release\NepgearEmbed.exe Nepgear.chs D:\out\version.dll
+```
+
+两点需要知道：
+
+- **它只替换数据、不重新编译代码**。源码改了以后要重新跑一次 `build_embed_tool.bat`，否则 exe 里带的还是旧模板。
+- **弹窗开关由模板决定**。想换成不弹窗的版本，先用 `build.bat x86 nopopup` 生成对应 DLL，再编译工具。
+- 转换是纯字节操作：读 `.chs`、逐条目预解压、重建资源节，几秒完成，输出未压缩。
+
+**为什么它在 Wine / Winlator 上也能用**：`.chs` 里的条目是 LZMS 压缩的，Windows 上靠 `cabinet.dll` 的压缩 API 解压，而 Wine 里那套 API 是个空壳——`CreateDecompressor` 直接返回成功，`Decompress` 只把输入原样拷回去，于是会看到「LZMS 解压失败」。所以工程里自带了一份 LZMS 解码器（`Common/lzms_decode.h`），系统 API 不可用或产出与预期大小不符时自动接管。同一个解码器也在 `version.dll` 里，容器中直接读压缩过的 `Nepgear.chs` 同样没问题。
+
+排查时可以用环境变量强制走内置解码器，对比两条路径的结果：
+
+```bat
+set NEPGEAR_FORCE_NATIVE_LZMS=1
+Release\NepgearEmbed.exe Nepgear.chs out\version.dll
+```
+
 ## 部署
 
 复制到游戏主 EXE 所在目录：
@@ -274,7 +311,9 @@ FontTraceSampleLimit=0
 
 `Unpacker.exe` 反向解包，用于检查封包内容。
 
-两者都是命令行工具，直接拖拽即可。
+`NepgearEmbed.exe` 把 `.chs` 直接转成 `version.dll`（补丁数据内嵌），双击开窗口、拖入文件即可，不需要编译环境。源码在 `tools\NepgearEmbed\`，用 `编译\build_embed_tool.bat` 构建，详见上面「不装 VS：图形化转换器」。
+
+这些都是命令行工具，直接拖拽即可。
 
 ## 目录结构
 

@@ -129,11 +129,17 @@
   每个条目都先预解压再内嵌：读归档的整条路径都不再做 LZMS 解压。
   代价是资源从 8.9 MB 变成 22 MB，换来的是一整条读取路径不再有解压开销。
 
+  解压本身走的是 Common\lzms_decode.h 里的内置解码器，而不是 cabinet.dll：
+  Wine / Winlator 上那套压缩 API 是空壳（CreateDecompressor 直接返回成功，
+  Decompress 只把输入拷回去），照搬系统 API 会一律报"LZMS 解压失败"。
+  内置解码器优先不用，系统 API 解不出正确大小时自动接管。
+
 
 【文件说明】
 
   编译\build_chs_embed.py   一键流程：生成资源 -> 调 build.bat
   编译\decompress_chs.cpp   LZMS 解压小工具（排查用）
+  Common\lzms_decode.h      内置 LZMS 解码器（不依赖 cabinet.dll）
   编译\编译教程.txt         本文件
 
   Nepgear\chs_payload.dat   资源输入（生成物，不要提交）

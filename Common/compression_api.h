@@ -2,8 +2,27 @@
 
 #include <windows.h>
 
+#include "lzms_decode.h"
+
 namespace CompressionApi {
 namespace Detail {
+
+// On Wine / Winlator the cabinet.dll compression API is a stub: CreateDecompressor
+// reports success without creating anything and Decompress just memcpy's the input.
+// So decompression always keeps a built-in decoder as a fallback. Define
+// NEPGEAR_FORCE_NATIVE_LZMS=1 to force it, which is how it gets tested on Windows.
+// (This header is also compiled by Packer/Unpacker with the ANSI code page, so all
+// comments here must stay ASCII.)
+inline bool ForceNativeLzms() {
+    static const bool forced = [] {
+        wchar_t value[8] = {};
+        const DWORD length = GetEnvironmentVariableW(
+            L"NEPGEAR_FORCE_NATIVE_LZMS", value, 8);
+        return length > 0 && (value[0] == L'1' || value[0] == L'y' ||
+                              value[0] == L'Y' || value[0] == L't');
+    }();
+    return forced;
+}
 
 constexpr DWORD kAlgorithmLzms = 5;
 constexpr DWORD kInformationClassBlockSize = 1;
@@ -131,14 +150,25 @@ public:
         const void* input, size_t inputSize,
         void* output, size_t outputSize, size_t* decompressedSize) {
         if (decompressedSize) *decompressedSize = 0;
-        if (!EnsureOpen()) return false;
-        SIZE_T actualSize = 0;
-        const BOOL result = decompress_(handle_, input, inputSize, output,
-            outputSize, decompressedSize ? &actualSize : nullptr);
-        if (decompressedSize) {
-            *decompressedSize = static_cast<size_t>(actualSize);
+
+        // Wine's stub memcpy's the whole input into the output buffer, so only let it
+        // near data that cannot overflow it.
+        if (!Detail::ForceNativeLzms() && inputSize <= outputSize && EnsureOpen()) {
+            SIZE_T actualSize = 0;
+            const BOOL result = decompress_(handle_, input, inputSize, output,
+                outputSize, &actualSize);
+            if (result && actualSize == outputSize) {
+                if (decompressedSize) *decompressedSize = static_cast<size_t>(actualSize);
+                return true;
+            }
         }
-        return result != FALSE;
+
+        // The system API is unavailable or produced the wrong size: use the built-in decoder.
+        if (LzmsNative::Decompress(input, inputSize, output, outputSize)) {
+            if (decompressedSize) *decompressedSize = outputSize;
+            return true;
+        }
+        return false;
     }
 
     void Close() {
