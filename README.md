@@ -39,7 +39,6 @@ BGI / Buriko、Artemis（含 Legacy）、KiriKiri / TVP、EntisGLS、Softpal、E
 build.bat              两个架构 Release
 build.bat x86          仅 32 位
 build.bat x64          仅 64 位
-build.bat x86 nopopup  不编译启动弹窗
 build.bat all rebuild  全量重建
 build.bat x86 debug    Debug 配置
 ```
@@ -48,22 +47,7 @@ build.bat x86 debug    Debug 配置
 
 ### 启动弹窗（补丁作者信息）
 
-启动时那个「游玩通知」有两个开关，编译期和运行期各一层：
-
-| 层 | 开关 | 效果 |
-| --- | --- | --- |
-| 编译期 | `NEPGEAR_ENABLE_STARTUP_POPUP=0` | 整段提示**连同字符串一起编掉**，DLL 里搜不到作者信息，也不再有 `MessageBox` 调用 |
-| 运行期 | `Nepgear.ini` → `[System] ShowStartupPopup=0` | 代码仍在，运行时直接跳过；改 ini 即可，不用重编 |
-
-编译期默认仍为 1。关闭方式任选：
-
-```bat
-build.bat x86 nopopup                              :: build.bat 位置参数
-python 编译\build_chs_embed.py Nepgear.chs x86 --no-popup
-msbuild Nepgear.sln -p:Configuration=Release -p:Platform=Win32 -p:NepgearStartupPopup=0
-```
-
-切换这个开关会走独立的中间目录（`obj\<平台>\<配置>\popup0|1\`），所以不会出现改了宏却复用旧 obj、弹窗照样出现的情况。
+启动时的「游玩通知」只有一个运行期开关：`Nepgear.ini` 里 `[System] ShowStartupPopup=0`。改完 ini 重启游戏就不弹了，不需要重编 DLL。
 
 `build_x86.bat` / `build_x64.bat` 是单架构的简写入口。也可以直接用 Visual Studio 打开 `Nepgear.sln`，三个工程（Nepgear、Packer、Unpacker）都在里面。
 
@@ -136,7 +120,6 @@ Release\NepgearEmbed.exe Nepgear.chs D:\out\version.dll
 两点需要知道：
 
 - **它只替换数据、不重新编译代码**。源码改了以后要重新跑一次 `build_embed_tool.bat`，否则 exe 里带的还是旧模板。
-- **弹窗开关由模板决定**。想换成不弹窗的版本，先用 `build.bat x86 nopopup` 生成对应 DLL，再编译工具。
 - 转换是纯字节操作：读 `.chs`、逐条目预解压、重建资源节，几秒完成，输出未压缩。
 
 **为什么它在 Wine / Winlator 上也能用**：`.chs` 里的条目是 LZMS 压缩的，Windows 上靠 `cabinet.dll` 的压缩 API 解压，而 Wine 里那套 API 是个空壳——`CreateDecompressor` 直接返回成功，`Decompress` 只把输入原样拷回去，于是会看到「LZMS 解压失败」。所以工程里自带了一份 LZMS 解码器（`Common/lzms_decode.h`），系统 API 不可用或产出与预期大小不符时自动接管。同一个解码器也在 `version.dll` 里，容器中直接读压缩过的 `Nepgear.chs` 同样没问题。
@@ -154,17 +137,16 @@ Release\NepgearEmbed.exe Nepgear.chs out\version.dll
 
 1. `version.dll` — 架构必须与游戏进程一致
 2. `Nepgear.ini` — 配置文件，**必须存为 UTF-16 LE**，缺失会直接弹窗退出
-3. 字体文件 — 文件名与 ini 里的 `FileName` 一致
 
 游戏启动时会加载同目录下的 `version.dll`，Nepgear 把原有调用转发给系统真正的 `version.dll`，游戏原有功能不受影响。（Winlator 这类容器默认优先加载内建 DLL，需要额外一条覆盖设置，见下面「Winlator / 模拟器」。）
 
 开启 `[LocaleEmulator] Enable=1` 时还需要把官方 LEP 2.x 的运行时 DLL 放进重定向文件夹（默认 `Nepgear/`）。同位数启动至少需要对应的 `LoaderDll` 与 `LocaleEmulatorPlus`；跨位数子进程需要同时提供同版本的 `LoaderDll_x86.dll`、`LocaleEmulatorPlus_x86.dll`、`LoaderDll_x64.dll`、`LocaleEmulatorPlus_x64.dll`。这些运行时不随仓库分发。
 
-已验证官方 LEP **v2.0.6.0**，并兼容 v2.0.0.0 的早期 2.x 配置接口。接口说明和字体更新对照见 [兼容更新说明](docs/compatibility.md)。
+已验证官方 LEP **v2.0.6.0**，并兼容 v2.0.0.0 的早期 2.x 配置接口，接口说明见 [兼容更新说明](docs/compatibility.md)。
 
 ### Winlator / 模拟器
 
-部署方式与桌面完全一致，三个文件丢进游戏主 EXE 目录即可，容器里**不需要**再放原汉化的加载器或 `.chs`。额外注意两点：
+部署方式与桌面完全一致，两个文件丢进游戏主 EXE 目录即可，容器里**不需要**再放原汉化的加载器或 `.chs`。额外注意两点：
 
 1. **让容器加载目录里这一份。** Wine 优先加载内建的 `version.dll`，不设置覆盖时本地文件根本不会被读到（表现为补丁毫无反应、日志也没有输出）。在容器环境变量或该游戏的快捷方式里加一条 `WINEDLLOVERRIDES=version=n,b`，需要在启动游戏前生效。
 2. **位数对齐。** 32 位游戏用 x86 产物，且容器的 Wine 位数要能跑 32 位进程；两者不匹配时 DLL 直接加载失败。

@@ -24,11 +24,6 @@ bool IsShuttingDown() {
 }
 } // namespace Utils
 
-// Build-time switch for the startup author notice. Set to 0 and rebuild to disable it.
-#ifndef NEPGEAR_ENABLE_STARTUP_POPUP
-#define NEPGEAR_ENABLE_STARTUP_POPUP 1
-#endif
-
 static void DebugPrintW(const wchar_t* format, ...) {
     wchar_t wbuf[2048];
     va_list args;

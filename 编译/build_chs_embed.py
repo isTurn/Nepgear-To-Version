@@ -14,8 +14,6 @@ Usage:
 
 Options:
     --dll NAME      Proxy host to build: version (default) or winmm.
-    --no-popup      Compile the startup author notice out of the DLL
-                    (same as NEPGEAR_ENABLE_STARTUP_POPUP=0).
     --no-build      Only regenerate the resource, do not run MSBuild.
     --rebuild       Force a full /t:Rebuild instead of an incremental build.
     --clean         Remove the payload resource and exit (no embedded data).
@@ -183,7 +181,7 @@ def sanitize_env():
     return env
 
 
-def run_build(targets, rebuild, proxy, popup):
+def run_build(targets, rebuild, proxy):
     build_bat = ROOT_DIR / "build.bat"
     if not build_bat.exists():
         raise RuntimeError("build.bat not found at %s" % build_bat)
@@ -193,7 +191,6 @@ def run_build(targets, rebuild, proxy, popup):
     arch = "all" if set(targets) == {"x86", "x64"} else targets[0]
 
     command = ['cmd', '/c', str(build_bat), arch, proxy]
-    command.append("popup" if popup else "nopopup")
     if rebuild:
         command.append("rebuild")
 
@@ -222,8 +219,6 @@ def main():
                         help="architecture to build (default: x86)")
     parser.add_argument("--dll", default="version", choices=["version", "winmm"],
                         help="proxy host DLL to build (default: version)")
-    parser.add_argument("--no-popup", action="store_true",
-                        help="compile the startup author notice out of the DLL")
     parser.add_argument("--no-build", action="store_true", help="only regenerate the resource")
     parser.add_argument("--rebuild", action="store_true", help="force a full /t:Rebuild")
     parser.add_argument("--clean", action="store_true",
@@ -265,9 +260,8 @@ def main():
         log("[3/3] Skipped (--no-build). Run build.bat to compile the DLL.")
         return 0
 
-    log("[3/3] Building %s (proxy=%s.dll, popup=%s)"
-        % (" + ".join(targets), args.dll, "off" if args.no_popup else "on"))
-    code = run_build(targets, args.rebuild, args.dll, not args.no_popup)
+    log("[3/3] Building %s (proxy=%s.dll)" % (" + ".join(targets), args.dll))
+    code = run_build(targets, args.rebuild, args.dll)
     if code != 0:
         log("BUILD FAILED (exit %d)" % code)
         return code

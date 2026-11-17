@@ -12,10 +12,6 @@ on:
         type: choice
         options: [x86, x64, all]
         default: x86
-      popup:
-        description: 编入启动弹窗（补丁作者信息）
-        type: boolean
-        default: true
       rebuild:
         description: 全量重建
         type: boolean
@@ -58,12 +54,10 @@ jobs:
         shell: pwsh
         env:
           ARCH: ${{ github.event.inputs.arch || 'x86' }}
-          POPUP: ${{ github.event.inputs.popup || 'true' }}
           REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
         run: |
           $script = Join-Path $PWD '编译\build_chs_embed.py'
           $argv = @($script, 'Nepgear.chs', $env:ARCH)
-          if ($env:POPUP -eq 'false') { $argv += '--no-popup' }
           if ($env:REBUILD -eq 'true') { $argv += '--rebuild' }
           Write-Host "python $argv"
           python @argv

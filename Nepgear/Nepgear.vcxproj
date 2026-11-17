@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -82,22 +82,15 @@
   <PropertyGroup>
     <NepgearProxy Condition="'$(NepgearProxy)'==''">version</NepgearProxy>
     <NepgearProxyIsVersion Condition="'$(NepgearProxy)'=='version'">true</NepgearProxyIsVersion>
-    <!-- Startup author notice. 1 (default) shows the 游玩通知 message box, 0
-         compiles the whole notice out of the DLL (no string, no MessageBox).
-         Override with -p:NepgearStartupPopup=0, or build.bat nopopup, or the
-         no-popup switch of 编译/build_chs_embed.py. -->
-    <NepgearStartupPopup Condition="'$(NepgearStartupPopup)'==''">1</NepgearStartupPopup>
-    <NepgearPopupDisabled Condition="'$(NepgearStartupPopup)'=='0'">true</NepgearPopupDisabled>
   </PropertyGroup>
   <PropertyGroup>
     <OutDir Condition="'$(Platform)'=='Win32'">$(ProjectDir)..\$(Configuration)\</OutDir>
     <OutDir Condition="'$(Platform)'=='x64'">$(ProjectDir)..\x64\$(Configuration)\</OutDir>
-    <!-- One IntDir per proxy and per popup setting: dllmain.cpp compiles a
-         different proxy header and a different set of exports, and
-         utils.cpp bakes NEPGEAR_ENABLE_STARTUP_POPUP into the binary. MSBuild
-         only compares timestamps, so without a separate IntDir a toggle would
-         silently reuse the previous objects. -->
-    <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\$(NepgearProxy)\popup$(NepgearStartupPopup)\</IntDir>
+    <!-- One IntDir per proxy host: dllmain.cpp compiles a different proxy
+         header and a different set of exports. MSBuild only compares
+         timestamps, so without a separate IntDir a toggle would silently
+         reuse the previous objects. -->
+    <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\$(NepgearProxy)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <TargetName>$(NepgearProxy)</TargetName>
@@ -119,7 +112,6 @@
         <SDLCheck>true</SDLCheck>
         <PreprocessorDefinitions>WIN32;_DEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <ConformanceMode>true</ConformanceMode>
         <PrecompiledHeader>NotUsing</PrecompiledHeader>
         <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -144,7 +136,6 @@
         <SDLCheck>true</SDLCheck>
         <PreprocessorDefinitions>WIN32;NDEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <ConformanceMode>true</ConformanceMode>
         <PrecompiledHeader>NotUsing</PrecompiledHeader>
         <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -167,7 +158,6 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -192,7 +182,6 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;NEPGEAR_EXPORTS;_WINDOWS;_USRDLL;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
         <PreprocessorDefinitions Condition="'$(NepgearProxyIsVersion)'=='true'">NEPGEAR_PROXY_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-        <PreprocessorDefinitions Condition="'$(NepgearPopupDisabled)'=='true'">NEPGEAR_ENABLE_STARTUP_POPUP=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -339,7 +328,7 @@
   </ImportGroup>
   <!-- The Release DLL is always shipped uncompressed: a plain PE image loads
        without an unpack stub and can be inspected with ordinary tools. -->
-  <!-- Switching proxy host or popup setting changes IntDir, so the objects the
+  <!-- Switching proxy host changes IntDir, so the objects the
        linker compares against are not the ones the previous build produced. Left alone, Link looks
        up-to-date (the old DLL is newer than these objects) and we ship the
        previous binary. Record the last setting and drop the output whenever it
@@ -347,7 +336,7 @@
   <Target Name="NepgearSettingsGuard" BeforeTargets="Link">
     <PropertyGroup>
       <NepgearSettingsFile>$(ProjectDir)obj\last-build-settings.txt</NepgearSettingsFile>
-      <NepgearSettingsToken>$(NepgearProxy)/popup$(NepgearStartupPopup)</NepgearSettingsToken>
+      <NepgearSettingsToken>$(NepgearProxy)</NepgearSettingsToken>
       <NepgearPreviousSettings />
     </PropertyGroup>
     <ReadLinesFromFile File="$(NepgearSettingsFile)" Condition="Exists('$(NepgearSettingsFile)')">

@@ -36,7 +36,6 @@
     }
 
     void ShowStartupPopup() {
-#if NEPGEAR_ENABLE_STARTUP_POPUP
         if (!Config::IsSystemEnabled) return;
         if (!Config::ShowStartupPopup) return;
         // KiriKiri starts the real game again with this flag after its
@@ -58,5 +57,4 @@
             CleanupPatchFiles();
             ExitProcess(0);
         }
-#endif
     }

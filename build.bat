@@ -3,15 +3,14 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul 2>nul
 cd /d "%~dp0"
 
-REM Usage: build.bat [x86|x64|all] [popup|nopopup] [rebuild] [debug]
-REM   The proxy DLL is always emitted uncompressed. nopopup compiles the startup
-REM   author notice out of the DLL entirely.
+REM Usage: build.bat [x86|x64|all] [rebuild] [debug]
+REM   The proxy DLL is always emitted uncompressed. The startup author notice is
+REM   controlled at runtime by ShowStartupPopup in Nepgear.ini.
 
 set "ARCH=all"
 set "BUILD_TARGET=Build"
 set "CONFIG=Release"
 set "PROXY=version"
-set "POPUP=1"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -21,13 +20,11 @@ if /I "%~1"=="x64"     ( set "ARCH=x64"          & shift & goto :parse_args )
 if /I "%~1"=="all"     ( set "ARCH=all"          & shift & goto :parse_args )
 if /I "%~1"=="winmm"   ( set "PROXY=winmm"       & shift & goto :parse_args )
 if /I "%~1"=="version" ( set "PROXY=version"     & shift & goto :parse_args )
-if /I "%~1"=="popup"   ( set "POPUP=1"           & shift & goto :parse_args )
-if /I "%~1"=="nopopup" ( set "POPUP=0"           & shift & goto :parse_args )
 if /I "%~1"=="rebuild" ( set "BUILD_TARGET=Rebuild" & shift & goto :parse_args )
 if /I "%~1"=="debug"   ( set "CONFIG=Debug"      & shift & goto :parse_args )
 if /I "%~1"=="release" ( set "CONFIG=Release"    & shift & goto :parse_args )
 echo ERROR: Unknown argument "%~1".
-echo Usage: %~nx0 [x86^|x64^|all] [popup^|nopopup] [rebuild] [debug]
+echo Usage: %~nx0 [x86^|x64^|all] [rebuild] [debug]
 exit /b 2
 
 :args_done
@@ -48,7 +45,7 @@ if /I "!ARCH!"=="all" (
 echo.
 echo ============================================
 if "!BUILD_RESULT!"=="0" (
-    echo !CONFIG! build succeeded ^(!BUILD_TARGET!, proxy=!PROXY!.dll, popup=!POPUP!^).
+    echo !CONFIG! build succeeded ^(!BUILD_TARGET!, proxy=!PROXY!.dll^).
     if /I "!ARCH!"=="x86" call :report x86 "Release"
     if /I "!ARCH!"=="all" (
         call :report x86 "Release"
@@ -88,10 +85,10 @@ exit /b 0
 
 :build_one
 echo.
-echo [INFO] Building Nepgear + Packer + Unpacker ^(!CONFIG!^|%~1, proxy=!PROXY!, popup=!POPUP!^)...
+echo [INFO] Building Nepgear + Packer + Unpacker ^(!CONFIG!^|%~1, proxy=!PROXY!^)...
 REM Suppress LNK4099 (detours.lib ships without a PDB).
 set "LINK=/IGNORE:4099"
-"!MSBUILD!" "Nepgear.sln" -p:Configuration=!CONFIG! -p:Platform=%~1 -p:NepgearProxy=!PROXY! -p:NepgearStartupPopup=!POPUP! -t:!BUILD_TARGET! -v:minimal -m -nologo
+"!MSBUILD!" "Nepgear.sln" -p:Configuration=!CONFIG! -p:Platform=%~1 -p:NepgearProxy=!PROXY! -t:!BUILD_TARGET! -v:minimal -m -nologo
 exit /b !ERRORLEVEL!
 
 :report

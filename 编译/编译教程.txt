@@ -21,36 +21,14 @@
     3. 松散文件目录始终优先于归档（原有行为，未改动）
 
 
-【启动弹窗：编进去还是彻底编掉】
+【启动弹窗：改 ini 就够了】
 
-  启动时那个「游玩通知」（补丁作者 + 声明）有两层开关：
+  启动时那个「游玩通知」（补丁作者 + 声明）只有一个运行期开关：
 
-    编译期  NEPGEAR_ENABLE_STARTUP_POPUP=0
-            整段提示连同字符串一起编掉，DLL 里搜不到作者信息，
-            连 MessageBoxW 调用都没有，体积也会小几百字节。
-            默认是 1（保留弹窗）。
+    Nepgear.ini -> [System] ShowStartupPopup=0
 
-    运行期  Nepgear.ini -> [System] ShowStartupPopup=0
-            代码还在，只是运行时跳过。改 ini 立刻生效，不用重新编译。
-
-  编译期关闭的三种写法（任选其一）：
-
-    一键脚本：
-      python 编译\build_chs_embed.py Nepgear.chs x86 --no-popup
-
-    build.bat 位置参数：
-      build.bat x86 nopopup
-
-    直接调 MSBuild：
-      msbuild Nepgear.sln -p:Configuration=Release -p:Platform=Win32 -p:NepgearStartupPopup=0
-
-  想恢复弹窗：去掉上述开关重新编译（build.bat x86 popup）。
-
-  注意：这个开关会切到独立的中间目录
-  （obj\<平台>\<配置>\popup0\ 与 popup1\），
-  所以关掉/打开一定会真正重编 utils.cpp，不存在"改了宏但复用旧 obj"的老坑。
-
-
+  改完 ini 重启游戏就不弹了，代码还在，不用重新编译。
+  想恢复：把这一行删掉或改成 1（默认就是 1）。
 【准备工作】
 
   1. Visual Studio 2022，安装时勾选"使用 C++ 的桌面开发"
@@ -77,11 +55,9 @@
 
     python 编译\build_chs_embed.py Nepgear.chs all
     python 编译\build_chs_embed.py D:\Games\某游戏\Nepgear.chs x86
-    python 编译\build_chs_embed.py Nepgear.chs x86 --no-popup
 
   其它开关：
 
-    --no-popup      不编译启动弹窗（等同 NEPGEAR_ENABLE_STARTUP_POPUP=0）
     --no-build      只生成资源，不编译
     --rebuild       强制全量重建（/t:Rebuild）
     --clean         删掉 chs_payload.rc / chs_payload.dat，之后构建不带内嵌
@@ -107,10 +83,9 @@
   第 3 步：编译
 
     build.bat x86 rebuild          -> Release\version.dll（未压缩）
-    build.bat x86 nopopup          -> 同上，但去掉启动弹窗
     build.bat all rebuild          -> 两个架构
 
-  build.bat 的位置参数可自由组合（架构 / popup|nopopup / rebuild / debug），
+  build.bat 的位置参数可自由组合（架构 / rebuild / debug），
   顺序不限。
   想恢复"不带内嵌"的普通构建：删掉 Nepgear\chs_payload.rc 与 chs_payload.dat
   再重建，或直接 python 编译\build_chs_embed.py --clean。
