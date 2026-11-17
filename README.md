@@ -115,7 +115,7 @@ python 编译\build_chs_embed.py --clean            :: 去掉内嵌，恢复普�
 
 上面两条路都要装 Visual Studio 或 Python。如果只是想把手上的 `.chs` 变成 `version.dll`，用这个独立小工具：它自己带着一份已经编译好的 DLL 当模板，只把里面的补丁数据换掉，**不需要 VS、不需要 Python，也不依赖系统解压组件**——拷贝到任何 Windows 机器、甚至直接放进 Winlator 容器里都能跑。
 
-它不属于发布产物，需要用本机工具链编译一次：
+现成的可执行文件在 [Releases](https://github.com/isTurn/Nepgear-To-Version/releases) 里，下下来就能用。也可以自己用本机工具链编译一次：
 
 ```bat
 编译\build_embed_tool.bat        :: 产物 Release\NepgearEmbed.exe
